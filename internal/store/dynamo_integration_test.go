@@ -338,9 +338,9 @@ func TestExcluirDoUsuario(t *testing.T) {
 
 func TestDoMes(t *testing.T) {
 	d, _, _ := tabelaDeTeste(t)
-	lancar(t, d, "u-1", "2026-10-31", "lazer", gasto.Cartao, 1)  // outro mês
-	lancar(t, d, "u-1", "2026-12-01", "lazer", gasto.Cartao, 1)  // outro mês
-	lancar(t, d, "u-2", "2026-11-10", "lazer", gasto.Cartao, 1)  // outro usuário
+	lancar(t, d, "u-1", "2026-10-31", "lazer", gasto.Cartao, 1) // outro mês
+	lancar(t, d, "u-1", "2026-12-01", "lazer", gasto.Cartao, 1) // outro mês
+	lancar(t, d, "u-2", "2026-11-10", "lazer", gasto.Cartao, 1) // outro usuário
 	var nov []gasto.Gasto
 	for _, data := range []string{"2026-11-05", "2026-11-01", "2026-11-30", "2026-11-05"} {
 		nov = append(nov, lancar(t, d, "u-1", data, "lazer", gasto.Fixo, 250))
