@@ -10,12 +10,12 @@ Serviço de gastos do Gestor de Gastos (Go, Lambda, DynamoDB). Guarda os gastos 
 | `internal/gasto` | Domínio: validação do lançamento, formato do ID, grupos e filtro da listagem |
 | `internal/app` | Casos de uso: criar, obter, atualizar, excluir, listar com cursor assinado, checar categoria em uso e consumir `UserDeleted` |
 | `internal/store` | Store DynamoDB (chaves abaixo) |
-| `internal/handler` | Liga os casos de uso ao `invoke.Router` e ao `events.Router` da go-commons, usados pelo `cmd/local` e, na tarefa 8.5, pela Lambda |
+| `internal/handler` | Liga os casos de uso ao `invoke.Router` e ao `events.Router` da go-commons, usados pela Lambda e pelo `cmd/local` |
 | `cmd/local` | Servidor HTTP local que chama os mesmos handlers da Lambda (ver "Rodar localmente") |
 | `internal/memstore` | Store em memória com a mesma semântica do DynamoDB, para os testes unitários |
 | `internal/dynamotest` | Cria tabelas temporárias no DynamoDB Local para os testes de integração |
-
-A Lambda (`cmd/lambda`), o CDK (`infra/`), o deploy em `dev` e o smoke test entram na tarefa 8.5, no padrão do categories-service.
+| `cmd/lambda` | Função na AWS: o mesmo `handler.Lambda` atende o invoke do BFF e o evento `UserDeleted` |
+| `infra` | App AWS CDK (Go), módulo separado: stack `gestor-gastos-<env>-expenses` (ver "Na AWS") |
 
 ## Contrato com o BFF
 
@@ -83,7 +83,7 @@ O servidor sobe em http://127.0.0.1:8084 e chama os mesmos handlers da Lambda:
 | `PORT` | `8084` |
 | `DYNAMODB_ENDPOINT` | `http://localhost:8000`; endpoints fora da máquina são recusados |
 | `EXPENSES_TABLE` | `gestor-gastos-expenses` |
-| `CURSOR_SECRET` | um valor fixo só para o ambiente local; precisa de pelo menos 32 bytes. Na AWS vem do SSM (tarefa 8.5) |
+| `CURSOR_SECRET` | um valor fixo só para o ambiente local; precisa de pelo menos 32 bytes. Na AWS vem do SSM (ver "Na AWS") |
 | `LOG_LEVEL` | `info` |
 
 **Segurança local:** o `/invoke` confia no `userId` do envelope. Na AWS, só o BFF consegue invocar a Lambda, por IAM. Localmente, o servidor escuta **só em 127.0.0.1**.
@@ -122,6 +122,28 @@ curl -s -o /dev/null -w '%{http_code}\n' -X POST localhost:8084/events -H 'Conte
 
 Para inspecionar a tabela, abra o dynamodb-admin em http://localhost:8001.
 
+## Na AWS
+
+A esteira (`.github/workflows/ci.yml`, sobre o `go-service.yml` do infra-base) implanta a stack `gestor-gastos-dev-expenses` a cada merge na `main`, no padrão do categories-service:
+
+| Recurso | Detalhe |
+| --- | --- |
+| Tabela `gestor-gastos-dev-expenses` | On-demand, `RETAIN`, chaves da seção DynamoDB, sem índices |
+| Lambda `gestor-gastos-dev-expenses` | arm64, 256 MB, 10 s, alias `live` com canary do CodeDeploy (10% por 5 min) e rollback pelo alarme de erros; logs por 7 dias |
+| Regra `gestor-gastos-dev-expenses-user-deleted` | `source` `gestor-gastos.users`, `detail-type` `UserDeleted`, com retentativas e a DLQ do barramento |
+| SSM publicado | `/gestor-gastos/dev/expenses/function-arn` (lido pelo BFF) e `/gestor-gastos/dev/expenses/table-name` |
+| SSM lido | `events/bus-name` e `events/dlq-arn` (stack `events` do infra-base) e o segredo dos cursores (abaixo) |
+
+**Segredo dos cursores.** A função lê, ao iniciar, o SecureString `/gestor-gastos/<env>/expenses/cursor-secret` (pelo menos 32 bytes), descriptografado, e só tem `ssm:GetParameter` nele. O CloudFormation não cria SecureString, então ele é criado uma vez à mão, antes do primeiro deploy (em `dev`, criado em 2026-11-11):
+
+```sh
+aws ssm put-parameter --name /gestor-gastos/dev/expenses/cursor-secret --type SecureString   --value "$(openssl rand -base64 48)" --region us-east-1
+```
+
+Trocar o valor (`--overwrite`) invalida os cursores em uso: quem estiver paginando recebe 400 `cursor_invalido` e volta à primeira página. Não há outro efeito.
+
+O smoke test confere os parâmetros publicados e o tipo do segredo, sem ler o valor. A role de deploy não invoca a Lambda; o teste de ponta a ponta fica na esteira do BFF. Os testes de assertion do CDK rodam com `cd infra && go test ./...`, sem AWS.
+
 ## Testes
 
 ```sh
@@ -137,4 +159,4 @@ task local:up
 go test -tags integration ./... -v
 ```
 
-A esteira (`.github/workflows/ci.yml`, sobre o `go-service.yml` do infra-base) roda vet, lint e os testes unitários e de integração em todo PR, com um DynamoDB Local como serviço e cobertura mínima de 80% por pacote.
+A esteira roda vet, lint e os testes unitários e de integração em todo PR, com um DynamoDB Local como serviço e cobertura mínima de 80% por pacote, além do `cdk diff` contra `dev`.

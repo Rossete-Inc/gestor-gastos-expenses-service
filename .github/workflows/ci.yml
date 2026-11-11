@@ -1,10 +1,8 @@
 # Esteira do expenses-service: chama o workflow reutilizável do infra-base
 # (docs/workflows.md e ADR 0007 no gestor-gastos-infra-base).
-#
-# Por enquanto só qualidade: vet, lint e testes unitários e de integração
-# (DynamoDB Local), com cobertura mínima de 80% por pacote. A Lambda, o CDK,
-# o deploy em dev e o smoke test entram na tarefa 8.5, no padrão do
-# categories-service.
+#   - pull_request: vet/lint/testes, build arm64, cdk synth + diff contra dev
+#   - push na main: qualidade, build, deploy em dev (stack gestor-gastos-dev-expenses)
+#     e smoke test
 name: ci
 
 on:
@@ -20,10 +18,37 @@ jobs:
     uses: Rossete-Inc/gestor-gastos-infra-base/.github/workflows/go-service.yml@main
     permissions:
       contents: read
-      id-token: write       # exigido pelo workflow reutilizável; sem CDK, não assume role
-      pull-requests: write
+      id-token: write       # OIDC na AWS
+      pull-requests: write  # comentário do cdk diff
     with:
       build-tags: integration
       dynamodb-local: true
-      lambdas: ""
-      cdk-dir: ""
+      lambdas: ./cmd/lambda
+      cdk-dir: infra
+      smoke-test: bash scripts/smoke.sh
+
+  # O infra/ é um módulo Go separado, que o `go test ./...` da raiz não
+  # alcança. Aqui rodam os testes de assertion do CDK, sem AWS.
+  infra:
+    name: testes do CDK (infra)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: infra
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: infra/go.mod
+          cache-dependency-path: infra/go.sum
+      # O jsii do CDK roda sobre o Node.
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "24"
+      - name: go mod tidy sem diferenças
+        run: |
+          go mod tidy
+          git diff --exit-code go.mod go.sum
+      - run: go vet ./...
+      - run: go test -count=1 -cover ./...
