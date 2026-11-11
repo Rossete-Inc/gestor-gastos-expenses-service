@@ -43,6 +43,10 @@ const (
 	// categoria. O BFF chama antes de excluir uma categoria (409
 	// "categoria_em_uso").
 	OpExisteGastoNaCategoria = "ExisteGastoNaCategoria"
+	// OpResumoMensal devolve ResumoMensalOut com os totais do mês em
+	// centavos e os 5 gastos mais recentes, para o painel. Mês sem gastos:
+	// totais zerados e listas vazias. Mês inválido: 422 "validacao" (mes).
+	OpResumoMensal = "ResumoMensal"
 )
 
 // Grupos de gasto, iguais aos do categories-service.
@@ -137,4 +141,42 @@ type ExisteGastoNaCategoriaIn struct {
 // ExisteGastoNaCategoriaOut é a resposta de ExisteGastoNaCategoria.
 type ExisteGastoNaCategoriaOut struct {
 	Existe bool `json:"existe"`
+}
+
+// ResumoMensalIn é o payload de ResumoMensal.
+type ResumoMensalIn struct {
+	// Mes no formato AAAA-MM. Obrigatório.
+	Mes string `json:"mes"`
+}
+
+// ResumoMensalOut é a resposta de ResumoMensal. Os totais são somas exatas
+// em centavos: a soma de TotaisPorGrupo e a de TotaisPorCategoria são iguais
+// a TotalCentavos. Os percentuais (maior resto) e o nome e a cor das
+// categorias ficam com o BFF. As listas vêm sempre presentes, vazias como [].
+type ResumoMensalOut struct {
+	Mes           string `json:"mes"`
+	TotalCentavos int64  `json:"totalCentavos"`
+	// TotaisPorGrupo traz sempre CARTAO e FIXO, nessa ordem, mesmo zerados.
+	TotaisPorGrupo []TotalGrupo `json:"totaisPorGrupo"`
+	// TotaisPorCategoria só tem categorias com gasto no mês, do maior total
+	// para o menor (empates por grupo e ID). A chave é o par categoria e
+	// grupo, o grupo gravado em cada gasto.
+	TotaisPorCategoria []TotalCategoria `json:"totaisPorCategoria"`
+	// Recentes são até 5 gastos, do mais recente para o mais antigo, como
+	// em ListarGastos.
+	Recentes []Gasto `json:"recentes"`
+}
+
+// TotalGrupo é a soma dos gastos de um grupo no mês.
+type TotalGrupo struct {
+	Grupo         string `json:"grupo"`
+	TotalCentavos int64  `json:"totalCentavos"`
+}
+
+// TotalCategoria é a soma dos gastos de uma categoria, dentro de um grupo,
+// no mês.
+type TotalCategoria struct {
+	CategoriaID   string `json:"categoriaId"`
+	Grupo         string `json:"grupo"`
+	TotalCentavos int64  `json:"totalCentavos"`
 }

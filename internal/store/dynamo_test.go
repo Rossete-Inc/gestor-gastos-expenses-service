@@ -101,6 +101,8 @@ func TestErrosDoClientViramInternos(t *testing.T) {
 	interno(t, "listar", err)
 	_, err = d.ExisteNaCategoria(context.Background(), "u-1", "c")
 	interno(t, "existe", err)
+	_, err = d.DoMes(context.Background(), "u-1", "2026-11")
+	interno(t, "do mês", err)
 	_, err = d.ExcluirDoUsuario(context.Background(), "u-1")
 	interno(t, "excluir do usuário", err)
 }
@@ -179,6 +181,8 @@ func TestItemCorrompido(t *testing.T) {
 			interno(t, "obter", err)
 			_, _, err = d.Listar(context.Background(), "u-1", gasto.Filtro{Mes: "2026-11"}, nil, 10)
 			interno(t, "listar", err)
+			_, err = d.DoMes(context.Background(), "u-1", "2026-11")
+			interno(t, "do mês", err)
 		})
 	}
 }
@@ -217,5 +221,27 @@ func TestEsperaPadrao(t *testing.T) {
 	d.espera(1)
 	if time.Since(inicio) < 20*time.Millisecond {
 		t.Error("a espera padrão não esperou")
+	}
+}
+
+func TestDoMesSegueAsContinuacoes(t *testing.T) {
+	// Acima de 1 MB por Query o DynamoDB devolve LastEvaluatedKey; o resumo
+	// precisa do mês inteiro.
+	a, b := gastoTeste(t, "2026-11-20"), gastoTeste(t, "2026-11-03")
+	ia, err := paraItem(a)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ib, err := paraItem(b)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f := &falso{queries: []*dynamodb.QueryOutput{
+		{Items: []map[string]types.AttributeValue{ia}, LastEvaluatedKey: map[string]types.AttributeValue{"PK": ia["PK"], "SK": ia["SK"]}},
+		{Items: []map[string]types.AttributeValue{ib}},
+	}}
+	gs, err := novoFalso(f).DoMes(context.Background(), "u-1", "2026-11")
+	if err != nil || len(gs) != 2 || gs[0].ID != a.ID || gs[1].ID != b.ID || f.nQuery != 2 {
+		t.Errorf("do mês = %v, %v (%d queries)", gs, err, f.nQuery)
 	}
 }

@@ -57,6 +57,14 @@ func Invoke(svc *app.Service, log *slog.Logger) *invoke.Router {
 		return contract.ExisteGastoNaCategoriaOut{Existe: existe}, err
 	}))
 
+	r.Handle(contract.OpResumoMensal, invoke.Typed(func(ctx context.Context, userID string, in contract.ResumoMensalIn) (contract.ResumoMensalOut, error) {
+		res, err := svc.ResumoMensal(ctx, userID, in.Mes)
+		if err != nil {
+			return contract.ResumoMensalOut{}, err
+		}
+		return res.Contract(), nil
+	}))
+
 	return r
 }
 

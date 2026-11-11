@@ -197,3 +197,49 @@ func TestUserDeleted(t *testing.T) {
 		t.Errorf("sobraram %d gastos", st.Quantos("u-1"))
 	}
 }
+
+func TestResumoMensalPeloContrato(t *testing.T) {
+	c, _, _, _ := montar(t)
+	var almocoCriado, aluguel contract.Gasto
+	if err := c.Call(ctx, contract.OpCriarGasto, "u-1", almoco(), &almocoCriado); err != nil {
+		t.Fatal(err)
+	}
+	fixo := contract.GastoIn{ValorCentavos: 150_000, Data: "2026-11-05", CategoriaID: "aluguel", Grupo: "FIXO", Recorrente: true}
+	if err := c.Call(ctx, contract.OpCriarGasto, "u-1", fixo, &aluguel); err != nil {
+		t.Fatal(err)
+	}
+
+	var r contract.ResumoMensalOut
+	if err := c.Call(ctx, contract.OpResumoMensal, "u-1", contract.ResumoMensalIn{Mes: "2026-11"}, &r); err != nil {
+		t.Fatal(err)
+	}
+	if r.Mes != "2026-11" || r.TotalCentavos != 154_590 {
+		t.Errorf("resumo = %+v", r)
+	}
+	if len(r.TotaisPorGrupo) != 2 || r.TotaisPorGrupo[0] != (contract.TotalGrupo{Grupo: "CARTAO", TotalCentavos: 4590}) || r.TotaisPorGrupo[1] != (contract.TotalGrupo{Grupo: "FIXO", TotalCentavos: 150_000}) {
+		t.Errorf("por grupo = %+v", r.TotaisPorGrupo)
+	}
+	quero := []contract.TotalCategoria{{CategoriaID: "aluguel", Grupo: "FIXO", TotalCentavos: 150_000}, {CategoriaID: "alimentacao", Grupo: "CARTAO", TotalCentavos: 4590}}
+	if len(r.TotaisPorCategoria) != 2 || r.TotaisPorCategoria[0] != quero[0] || r.TotaisPorCategoria[1] != quero[1] {
+		t.Errorf("por categoria = %+v", r.TotaisPorCategoria)
+	}
+	if len(r.Recentes) != 2 || r.Recentes[0] != aluguel || r.Recentes[1] != almocoCriado {
+		t.Errorf("recentes = %+v", r.Recentes)
+	}
+
+	err := c.Call(ctx, contract.OpResumoMensal, "u-1", contract.ResumoMensalIn{Mes: "2026-13"}, &r)
+	if e := errs.As(err); e == nil || e.Kind != errs.KindValidation {
+		t.Errorf("mês inválido = %v", err)
+	}
+}
+
+func TestResumoMensalFormatoJSON(t *testing.T) {
+	// Mês vazio: totais zerados, os dois grupos e listas como [].
+	_, r, _, _ := montar(t)
+	payload, _ := json.Marshal(contract.ResumoMensalIn{Mes: "2026-11"})
+	resp := r.Dispatch(ctx, invoke.Request{Operation: contract.OpResumoMensal, UserID: "u-1", Payload: payload})
+	quero := `{"mes":"2026-11","totalCentavos":0,"totaisPorGrupo":[{"grupo":"CARTAO","totalCentavos":0},{"grupo":"FIXO","totalCentavos":0}],"totaisPorCategoria":[],"recentes":[]}`
+	if string(resp.Payload) != quero {
+		t.Errorf("payload =\n%s\nquero\n%s", resp.Payload, quero)
+	}
+}

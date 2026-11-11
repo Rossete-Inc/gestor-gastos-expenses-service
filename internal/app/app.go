@@ -5,6 +5,7 @@ package app
 import (
 	"context"
 	"log/slog"
+	"slices"
 	"strings"
 	"time"
 
@@ -33,6 +34,9 @@ type Store interface {
 	// recente para o mais antigo, a partir da chave inicio (nil = do começo).
 	// proximo é a chave para continuar, ou nil quando não há mais gastos.
 	Listar(ctx context.Context, userID string, f gasto.Filtro, inicio page.Key, limite int) (itens []gasto.Gasto, proximo page.Key, err error)
+	// DoMes devolve todos os gastos do usuário no mês (AAAA-MM), do mais
+	// recente para o mais antigo. Mês sem gastos: lista vazia, sem erro.
+	DoMes(ctx context.Context, userID, mes string) ([]gasto.Gasto, error)
 	// ExisteNaCategoria informa se o usuário tem algum gasto na categoria.
 	ExisteNaCategoria(ctx context.Context, userID, categoriaID string) (bool, error)
 	// ExcluirDoUsuario apaga todos os gastos do usuário e devolve quantos
@@ -162,6 +166,27 @@ func (s *Service) ListarGastos(ctx context.Context, userID string, in Listagem) 
 		return page.Page[gasto.Gasto]{}, errs.Internal(err)
 	}
 	return page.New(itens, cursor), nil
+}
+
+// ResumoMensal soma os gastos do mês para o painel: total, totais por grupo
+// e por categoria e os 5 mais recentes. Lê o mês inteiro numa Query e soma
+// em memória (design.md).
+func (s *Service) ResumoMensal(ctx context.Context, userID, mes string) (gasto.Resumo, error) {
+	if err := gasto.ExigirUsuario(userID); err != nil {
+		return gasto.Resumo{}, err
+	}
+	mes = strings.TrimSpace(mes)
+	if !gasto.MesValido(mes) {
+		return gasto.Resumo{}, errs.Validation("Mês inválido.", errs.FieldError{Field: "mes", Message: "deve ser um mês válido no formato AAAA-MM"})
+	}
+	gastos, err := s.store.DoMes(ctx, userID, mes)
+	if err != nil {
+		return gasto.Resumo{}, err
+	}
+	// O store já filtra pela partition key; descartar gasto alheio aqui é
+	// defesa extra, como em ObterGasto.
+	gastos = slices.DeleteFunc(gastos, func(g gasto.Gasto) bool { return g.UserID != userID })
+	return gasto.Resumir(mes, gastos), nil
 }
 
 // ExisteGastoNaCategoria informa se o usuário tem algum gasto na categoria.

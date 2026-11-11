@@ -434,6 +434,10 @@ func (s storeAlheio) Substituir(context.Context, gasto.Gasto, gasto.Gasto) error
 	return errs.Internal(errors.New("não devia substituir"))
 }
 
+func (s storeAlheio) DoMes(context.Context, string, string) ([]gasto.Gasto, error) {
+	return []gasto.Gasto{{ID: "20261103-01JC8Z6Q3N4W5X6Y7Z8A9B0C1D", UserID: "outro", Data: "2026-11-03", Grupo: gasto.Cartao, CategoriaID: "lazer", ValorCentavos: 999}}, nil
+}
+
 func TestDefesaContraStoreComBug(t *testing.T) {
 	svc := New(storeAlheio{memstore.New()}, codec(t, segredo), nil)
 	id := "20261103-01JC8Z6Q3N4W5X6Y7Z8A9B0C1D"
@@ -442,5 +446,82 @@ func TestDefesaContraStoreComBug(t *testing.T) {
 	}
 	if _, err := svc.AtualizarGasto(ctx, "u-1", id, dados("2026-11-03", "lazer", gasto.Cartao, 1)); codigo(err) != "gasto_nao_encontrado" {
 		t.Errorf("atualizar = %v", err)
+	}
+	if r, err := svc.ResumoMensal(ctx, "u-1", "2026-11"); err != nil || r.TotalCentavos != 0 || len(r.Recentes) != 0 {
+		t.Errorf("resumo = %+v, %v", r, err)
+	}
+}
+
+func TestResumoMensal(t *testing.T) {
+	svc, _ := montar(t)
+	criar(t, svc, "u-1", dados("2026-11-03", "alimentacao", gasto.Cartao, 10_000))
+	criar(t, svc, "u-1", dados("2026-11-04", "transporte", gasto.Cartao, 20_000))
+	criar(t, svc, "u-1", dados("2026-11-05", "aluguel", gasto.Fixo, 170_000))
+	criar(t, svc, "u-1", dados("2026-10-31", "aluguel", gasto.Fixo, 999)) // outro mês
+	criar(t, svc, "u-2", dados("2026-11-05", "aluguel", gasto.Fixo, 777)) // outro usuário
+
+	r, err := svc.ResumoMensal(ctx, "u-1", " 2026-11 ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.Mes != "2026-11" || r.TotalCentavos != 200_000 || len(r.Recentes) != 3 || len(r.PorCategoria) != 3 {
+		t.Errorf("resumo = %+v", r)
+	}
+	if r.PorGrupo[0] != (gasto.TotalGrupo{Grupo: gasto.Cartao, TotalCentavos: 30_000}) || r.PorGrupo[1] != (gasto.TotalGrupo{Grupo: gasto.Fixo, TotalCentavos: 170_000}) {
+		t.Errorf("por grupo = %+v", r.PorGrupo)
+	}
+	if r.Recentes[0].Data != "2026-11-05" {
+		t.Errorf("mais recente = %+v", r.Recentes[0])
+	}
+}
+
+func TestResumoMensalReflete(t *testing.T) {
+	// Cenário "Novo gasto refletido": o resumo lê o store a cada chamada.
+	svc, _ := montar(t)
+	g := criar(t, svc, "u-1", dados("2026-11-03", "lazer", gasto.Cartao, 100))
+	if _, err := svc.AtualizarGasto(ctx, "u-1", g.ID, dados("2026-11-03", "lazer", gasto.Cartao, 250)); err != nil {
+		t.Fatal(err)
+	}
+	novo := criar(t, svc, "u-1", dados("2026-11-04", "lazer", gasto.Cartao, 50))
+	r, err := svc.ResumoMensal(ctx, "u-1", "2026-11")
+	if err != nil || r.TotalCentavos != 300 || r.Recentes[0].ID != novo.ID {
+		t.Fatalf("resumo = %+v, %v", r, err)
+	}
+	if err := svc.ExcluirGasto(ctx, "u-1", novo.ID); err != nil {
+		t.Fatal(err)
+	}
+	if r, _ = svc.ResumoMensal(ctx, "u-1", "2026-11"); r.TotalCentavos != 250 || len(r.Recentes) != 1 {
+		t.Errorf("depois de excluir = %+v", r)
+	}
+}
+
+func TestResumoMensalMesVazio(t *testing.T) {
+	svc, _ := montar(t)
+	criar(t, svc, "u-1", dados("2026-10-31", "lazer", gasto.Cartao, 100))
+	r, err := svc.ResumoMensal(ctx, "u-1", "2026-11")
+	if err != nil || r.TotalCentavos != 0 || len(r.PorGrupo) != 2 || r.PorCategoria == nil || len(r.PorCategoria) != 0 || r.Recentes == nil || len(r.Recentes) != 0 {
+		t.Errorf("mês vazio = %#v, %v", r, err)
+	}
+}
+
+func TestResumoMensalInvalido(t *testing.T) {
+	svc, _ := montar(t)
+	for _, mes := range []string{"", "2026-13", "2026-1", "1899-12", "nov/2026"} {
+		_, err := svc.ResumoMensal(ctx, "u-1", mes)
+		if e := errs.As(err); e == nil || e.Kind != errs.KindValidation || len(e.Fields) != 1 || e.Fields[0].Field != "mes" {
+			t.Errorf("mes %q = %v", mes, err)
+		}
+	}
+	if _, err := svc.ResumoMensal(ctx, " ", "2026-11"); codigo(err) != "usuario_ausente" {
+		t.Errorf("sem usuário = %v", err)
+	}
+}
+
+func TestResumoMensalErroDoStore(t *testing.T) {
+	svc, st := montar(t)
+	falha := errs.Internal(errors.New("dynamo fora"))
+	st.Err = falha
+	if _, err := svc.ResumoMensal(ctx, "u-1", "2026-11"); !errors.Is(err, falha) {
+		t.Errorf("resumo = %v", err)
 	}
 }
