@@ -335,3 +335,31 @@ func TestExcluirDoUsuario(t *testing.T) {
 		t.Errorf("apagou o de outro usuário: %v", err)
 	}
 }
+
+func TestDoMes(t *testing.T) {
+	d, _, _ := tabelaDeTeste(t)
+	lancar(t, d, "u-1", "2026-10-31", "lazer", gasto.Cartao, 1)  // outro mês
+	lancar(t, d, "u-1", "2026-12-01", "lazer", gasto.Cartao, 1)  // outro mês
+	lancar(t, d, "u-2", "2026-11-10", "lazer", gasto.Cartao, 1)  // outro usuário
+	var nov []gasto.Gasto
+	for _, data := range []string{"2026-11-05", "2026-11-01", "2026-11-30", "2026-11-05"} {
+		nov = append(nov, lancar(t, d, "u-1", data, "lazer", gasto.Fixo, 250))
+	}
+	slices.SortFunc(nov, gasto.MaisRecentePrimeiro)
+
+	gs, err := d.DoMes(ctx, "u-1", "2026-11")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(idsDe(gs), idsDe(nov)) {
+		t.Errorf("do mês:\n%v\nquero\n%v", idsDe(gs), idsDe(nov))
+	}
+	if gs[0].ValorCentavos != 250 || gs[0].Grupo != gasto.Fixo || gs[0].UserID != "u-1" {
+		t.Errorf("gasto lido = %+v", gs[0])
+	}
+
+	vazio, err := d.DoMes(ctx, "u-1", "2026-09")
+	if err != nil || vazio == nil || len(vazio) != 0 {
+		t.Errorf("mês vazio = %v, %v", vazio, err)
+	}
+}

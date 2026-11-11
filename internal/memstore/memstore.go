@@ -123,6 +123,24 @@ func (s *Store) Listar(_ context.Context, userID string, f gasto.Filtro, inicio 
 	return itens, nil, nil
 }
 
+// DoMes implementa app.Store, do mais recente para o mais antigo como o
+// Dynamo.
+func (s *Store) DoMes(_ context.Context, userID, mes string) ([]gasto.Gasto, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.Err != nil {
+		return nil, s.Err
+	}
+	itens := []gasto.Gasto{}
+	for _, g := range s.gastos[userID] {
+		if g.Mes() == mes {
+			itens = append(itens, g)
+		}
+	}
+	slices.SortFunc(itens, func(a, b gasto.Gasto) int { return strings.Compare(sk(b.ID), sk(a.ID)) })
+	return itens, nil
+}
+
 // ExisteNaCategoria implementa app.Store.
 func (s *Store) ExisteNaCategoria(_ context.Context, userID, categoriaID string) (bool, error) {
 	s.mu.Lock()

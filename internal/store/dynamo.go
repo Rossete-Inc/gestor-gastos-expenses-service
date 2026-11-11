@@ -325,6 +325,40 @@ func (d *Dynamo) Listar(ctx context.Context, userID string, f gasto.Filtro, inic
 	}
 }
 
+// DoMes implementa app.Store: uma Query por PK e begins_with(SK,
+// "EXP#AAAA-MM-"), seguindo as continuações até o fim do mês (design.md,
+// ResumoMensal). Leitura consistente, para o painel refletir o gasto que o
+// usuário acabou de lançar, editar ou excluir.
+func (d *Dynamo) DoMes(ctx context.Context, userID, mes string) ([]gasto.Gasto, error) {
+	in := &dynamodb.QueryInput{
+		TableName:              aws.String(d.table),
+		KeyConditionExpression: aws.String("PK = :pk AND begins_with(SK, :mes)"),
+		ExpressionAttributeValues: map[string]types.AttributeValue{
+			":pk": s(PK(userID)), ":mes": s(prefixoMes(mes)),
+		},
+		ScanIndexForward: aws.Bool(false),
+		ConsistentRead:   aws.Bool(true),
+	}
+	itens := []gasto.Gasto{}
+	for {
+		out, err := d.api.Query(ctx, in)
+		if err != nil {
+			return nil, errs.Internal(fmt.Errorf("ler gastos do mês: %w", err))
+		}
+		for _, raw := range out.Items {
+			g, err := decodificar(raw)
+			if err != nil {
+				return nil, err
+			}
+			itens = append(itens, g)
+		}
+		if len(out.LastEvaluatedKey) == 0 {
+			return itens, nil
+		}
+		in.ExclusiveStartKey = out.LastEvaluatedKey
+	}
+}
+
 // ExisteNaCategoria implementa app.Store: percorre a partição do usuário só
 // com as chaves e para no primeiro gasto da categoria. Leitura consistente,
 // para um gasto recém-lançado bloquear a exclusão da categoria.

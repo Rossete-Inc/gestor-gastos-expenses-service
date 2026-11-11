@@ -29,9 +29,11 @@ Toda operação age sobre o `userId` do envelope, que o BFF tira do token. Envel
 | `ExcluirGasto` | `{"id"}` | sem payload | 404 `gasto_nao_encontrado` |
 | `ListarGastos` | `{"mes","grupo?","categoriaId?","cursor?","limit?"}` | `{"items":[Gasto],"nextCursor?"}`, do mais recente para o mais antigo | 422 `validacao` (`mes`, `grupo`, `categoriaId`); 400 `cursor_invalido` |
 | `ExisteGastoNaCategoria` | `{"categoriaId"}` | `{"existe":bool}` | 422 `validacao` |
+| `ResumoMensal` | `{"mes"}` | `ResumoMensalOut` (abaixo) | 422 `validacao` (`mes`) |
 
 - `GastoIn` é `{"valorCentavos","data","categoriaId","grupo","descricao?","recorrente"}`: o `GastoIn` do `openapi.yaml` do BFF mais o `grupo` da categoria.
 - `Gasto` é `{"id","valorCentavos","data","grupo","categoriaId","descricao?","recorrente"}`. O BFF troca o `categoriaId` pelo resumo da categoria (nome e cor) do schema `Gasto` do openapi.
+- `ResumoMensalOut` é `{"mes","totalCentavos","totaisPorGrupo":[{"grupo","totalCentavos"}],"totaisPorCategoria":[{"categoriaId","grupo","totalCentavos"}],"recentes":[Gasto]}`. `totaisPorGrupo` traz sempre `CARTAO` e `FIXO`, nessa ordem, mesmo zerados. `totaisPorCategoria` só tem categorias com gasto no mês, do maior total para o menor. `recentes` são até 5 gastos, na ordem da listagem. As duas somas por grupo e por categoria fecham exatamente com `totalCentavos`. Mês sem gastos devolve totais zerados e listas `[]`. O nome e a cor das categorias e os percentuais (método do maior resto) ficam com o BFF, em `/telas/dashboard`.
 - A existência e a visibilidade da categoria são checadas pelo BFF no categories-service antes de `CriarGasto` e `AtualizarGasto`. O BFF também chama `ExisteGastoNaCategoria` antes de excluir uma categoria (409 `categoria_em_uso`). Ver design.md, "Regras que atravessam serviços ficam no BFF".
 
 Evento consumido: `UserDeleted` (`{"userId"}`), que apaga todos os gastos do usuário em lotes. É idempotente.
@@ -58,6 +60,7 @@ Atributos: `gastoId`, `valorCentavos` (número inteiro), `data`, `grupo`, `categ
 
 - **Isolamento:** tudo do usuário fica na partição dele. Ler, editar ou excluir o gasto de outro usuário não encontra nada.
 - **Listagem do mês:** uma Query com `begins_with(SK, "EXP#AAAA-MM-")` em ordem decrescente. Os filtros por grupo e categoria usam `FilterExpression`. Como o `Limit` do DynamoDB conta os itens antes do filtro, o store monta a página com Queries de até 100 itens até juntar o tamanho pedido. Se a página enche exatamente no fim de uma Query que ainda tinha continuação, o cursor é devolvido mesmo sem haver mais gastos, e a página seguinte pode vir vazia, sem cursor.
+- **Resumo do mês:** uma Query com `begins_with(SK, "EXP#AAAA-MM-")`, seguindo as continuações até o fim do mês, e as somas em memória. O volume pessoal (dezenas a centenas de gastos por mês) cabe nisso; o gatilho para materializar os totais via Streams está no ADR 0002.
 - **Categoria em uso:** uma Query na partição do usuário só com as chaves, filtrando por `categoriaId` e parando no primeiro gasto encontrado.
 - Leituras consistentes em todas as operações, para um gasto recém-lançado aparecer na hora.
 
@@ -106,6 +109,9 @@ curl -s -X POST localhost:8084/invoke -H 'Content-Type: application/json' \
 # editar (troque <id>); mudar a data devolve um id novo
 curl -s -X POST localhost:8084/invoke -H 'Content-Type: application/json' \
   -d '{"operation":"AtualizarGasto","userId":"u-demo","payload":{"id":"<id>","valorCentavos":9990,"data":"2026-11-04","categoriaId":"internet","grupo":"FIXO"}}'
+
+# resumo de novembro para o painel
+curl -s -X POST localhost:8084/invoke -H 'Content-Type: application/json'   -d '{"operation":"ResumoMensal","userId":"u-demo","payload":{"mes":"2026-11"}}'
 
 # a categoria está em uso?
 curl -s -X POST localhost:8084/invoke -H 'Content-Type: application/json' \
