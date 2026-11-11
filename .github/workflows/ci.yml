@@ -1,0 +1,29 @@
+# Esteira do expenses-service: chama o workflow reutilizável do infra-base
+# (docs/workflows.md e ADR 0007 no gestor-gastos-infra-base).
+#
+# Por enquanto só qualidade: vet, lint e testes unitários e de integração
+# (DynamoDB Local), com cobertura mínima de 80% por pacote. A Lambda, o CDK,
+# o deploy em dev e o smoke test entram na tarefa 8.5, no padrão do
+# categories-service.
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  esteira:
+    uses: Rossete-Inc/gestor-gastos-infra-base/.github/workflows/go-service.yml@main
+    permissions:
+      contents: read
+      id-token: write       # exigido pelo workflow reutilizável; sem CDK, não assume role
+      pull-requests: write
+    with:
+      build-tags: integration
+      dynamodb-local: true
+      lambdas: ""
+      cdk-dir: ""
