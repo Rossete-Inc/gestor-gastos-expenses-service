@@ -1,13 +1,21 @@
-// Package store grava os gastos no DynamoDB.
+// Package store grava os gastos e os cartões no DynamoDB.
 //
 // Chaves (contrato com o CDK e com o seed do infra-base, docs/local.md):
 //
-//	gasto   PK=USER#<userId>   SK=EXP#<AAAA-MM-DD>#<ULID>
+//	gasto   PK=USER#<userId>   SK=EXP#<AAAA-MM ref>#<AAAA-MM-DD>#<ULID>
+//	cartão  PK=USER#<userId>   SK=CARD#<ULID>
+//
+// Antes da change cartoes-credito a SK do gasto era EXP#<AAAA-MM-DD>#<ULID>
+// (formato legado, sem o mês de referência). Até a migração
+// (scripts/migrar-mes-referencia) os dois formatos são lidos: o prefixo
+// "EXP#AAAA-MM" pega "EXP#AAAA-MM#..." (atual) e "EXP#AAAA-MM-..."
+// (legado, cujo mês de referência é o da data). Nessa transição a ordem da
+// listagem agrupa os legados antes dos atuais.
 //
 // Tudo de um usuário fica na partição dele, então a partition key isola os
-// usuários: um gasto alheio simplesmente não é encontrado. A SK em ordem
-// decrescente dá a listagem do mês do mais recente para o mais antigo, e o
-// begins_with(SK, "EXP#AAAA-MM-") seleciona o mês. Os filtros por grupo e
+// usuários: um gasto ou cartão alheio simplesmente não é encontrado. A SK em
+// ordem decrescente dá a listagem do mês do mais recente para o mais antigo,
+// e o begins_with(SK, "EXP#AAAA-MM") seleciona o mês de referência. Os filtros por grupo e
 // categoria usam FilterExpression; o volume pessoal (dezenas a centenas de
 // gastos por mês) cabe nisso sem índice secundário (design.md).
 package store
@@ -74,8 +82,10 @@ type item struct {
 	GastoID       string `dynamodbav:"gastoId"`
 	ValorCentavos int64  `dynamodbav:"valorCentavos"`
 	Data          string `dynamodbav:"data"`
+	MesReferencia string `dynamodbav:"mesReferencia,omitempty"`
 	Grupo         string `dynamodbav:"grupo"`
 	CategoriaID   string `dynamodbav:"categoriaId"`
+	CartaoID      string `dynamodbav:"cartaoId,omitempty"`
 	Descricao     string `dynamodbav:"descricao,omitempty"`
 	Recorrente    bool   `dynamodbav:"recorrente"`
 	CriadoEm      string `dynamodbav:"criadoEm"`
@@ -85,17 +95,22 @@ type item struct {
 // PK é a partition key do usuário.
 func PK(userID string) string { return "USER#" + userID }
 
-// SK é a sort key do gasto id. ok é false se o ID estiver fora do formato.
+// SK é a sort key do gasto id, nos dois formatos. ok é false se o ID estiver
+// fora do formato.
 func SK(id string) (sk string, ok bool) {
-	data, ulid, ok := gasto.PartesDoID(id)
+	p, ok := gasto.PartesDoID(id)
 	if !ok {
 		return "", false
 	}
-	return prefixoGasto + data + "#" + ulid, true
+	if p.Legado {
+		return prefixoGasto + p.Data + "#" + p.ULID, true
+	}
+	return prefixoGasto + p.MesReferencia + "#" + p.Data + "#" + p.ULID, true
 }
 
-// prefixoMes seleciona os gastos do mês (AAAA-MM).
-func prefixoMes(mes string) string { return prefixoGasto + mes + "-" }
+// prefixoMes seleciona os gastos do mês de referência (AAAA-MM) nos dois
+// formatos de SK: "EXP#AAAA-MM#..." e o legado "EXP#AAAA-MM-...".
+func prefixoMes(mes string) string { return prefixoGasto + mes }
 
 func chave(userID, id string) (map[string]types.AttributeValue, error) {
 	sk, ok := SK(id)
@@ -115,7 +130,8 @@ func paraItem(g gasto.Gasto) (map[string]types.AttributeValue, error) {
 	}
 	it := item{
 		PK: PK(g.UserID), SK: sk, GastoID: g.ID,
-		ValorCentavos: g.ValorCentavos, Data: g.Data, Grupo: string(g.Grupo), CategoriaID: g.CategoriaID,
+		ValorCentavos: g.ValorCentavos, Data: g.Data, MesReferencia: g.Mes(),
+		Grupo: string(g.Grupo), CategoriaID: g.CategoriaID, CartaoID: g.CartaoID,
 		Descricao: g.Descricao, Recorrente: g.Recorrente,
 		CriadoEm: g.CriadoEm.UTC().Format(formatoData),
 	}
@@ -136,8 +152,13 @@ func decodificar(raw map[string]types.AttributeValue) (gasto.Gasto, error) {
 	}
 	g := gasto.Gasto{
 		ID: it.GastoID, UserID: strings.TrimPrefix(it.PK, "USER#"),
-		ValorCentavos: it.ValorCentavos, Data: it.Data, Grupo: gasto.Grupo(it.Grupo), CategoriaID: it.CategoriaID,
+		ValorCentavos: it.ValorCentavos, Data: it.Data, MesReferencia: it.MesReferencia,
+		Grupo: gasto.Grupo(it.Grupo), CategoriaID: it.CategoriaID, CartaoID: it.CartaoID,
 		Descricao: it.Descricao, Recorrente: it.Recorrente,
+	}
+	if g.MesReferencia == "" && len(g.Data) >= len(gasto.LayoutMes) {
+		// Item legado: o mês de referência é o da data.
+		g.MesReferencia = g.Data[:len(gasto.LayoutMes)]
 	}
 	var err error
 	if g.CriadoEm, err = time.Parse(formatoData, it.CriadoEm); err != nil {
@@ -286,6 +307,14 @@ func (d *Dynamo) Listar(ctx context.Context, userID string, f gasto.Filtro, inic
 		filtros = append(filtros, "categoriaId = :categoria")
 		in.ExpressionAttributeValues[":categoria"] = s(f.CategoriaID)
 	}
+	switch f.CartaoID {
+	case "":
+	case gasto.SemCartao:
+		filtros = append(filtros, "attribute_not_exists(cartaoId)")
+	default:
+		filtros = append(filtros, "cartaoId = :cartao")
+		in.ExpressionAttributeValues[":cartao"] = s(f.CartaoID)
+	}
 	if len(filtros) > 0 {
 		in.FilterExpression = aws.String(strings.Join(filtros, " AND "))
 	}
@@ -326,7 +355,7 @@ func (d *Dynamo) Listar(ctx context.Context, userID string, f gasto.Filtro, inic
 }
 
 // DoMes implementa app.Store: uma Query por PK e begins_with(SK,
-// "EXP#AAAA-MM-"), seguindo as continuações até o fim do mês (design.md,
+// "EXP#AAAA-MM"), seguindo as continuações até o fim do mês (design.md,
 // ResumoMensal). Leitura consistente, para o painel refletir o gasto que o
 // usuário acabou de lançar, editar ou excluir.
 func (d *Dynamo) DoMes(ctx context.Context, userID, mes string) ([]gasto.Gasto, error) {
@@ -339,11 +368,34 @@ func (d *Dynamo) DoMes(ctx context.Context, userID, mes string) ([]gasto.Gasto, 
 		ScanIndexForward: aws.Bool(false),
 		ConsistentRead:   aws.Bool(true),
 	}
+	return d.gastos(ctx, in, "ler gastos do mês")
+}
+
+// DesdeMes implementa app.Store: os gastos com mês de referência a partir de
+// mes (AAAA-MM), inclusive os futuros, numa Query por PK e SK entre
+// "EXP#AAAA-MM" e "EXP$" (o caractere seguinte a "#"), do mais recente para
+// o mais antigo. Serve ao limite usado do cartão, que conta faturas abertas e
+// parcelas futuras.
+func (d *Dynamo) DesdeMes(ctx context.Context, userID, mes string) ([]gasto.Gasto, error) {
+	in := &dynamodb.QueryInput{
+		TableName:              aws.String(d.table),
+		KeyConditionExpression: aws.String("PK = :pk AND SK BETWEEN :de AND :ate"),
+		ExpressionAttributeValues: map[string]types.AttributeValue{
+			":pk": s(PK(userID)), ":de": s(prefixoMes(mes)), ":ate": s("EXP$"),
+		},
+		ScanIndexForward: aws.Bool(false),
+		ConsistentRead:   aws.Bool(true),
+	}
+	return d.gastos(ctx, in, "ler gastos a partir do mês")
+}
+
+// gastos executa a Query seguindo as continuações e decodifica os gastos.
+func (d *Dynamo) gastos(ctx context.Context, in *dynamodb.QueryInput, oQue string) ([]gasto.Gasto, error) {
 	itens := []gasto.Gasto{}
 	for {
 		out, err := d.api.Query(ctx, in)
 		if err != nil {
-			return nil, errs.Internal(fmt.Errorf("ler gastos do mês: %w", err))
+			return nil, errs.Internal(fmt.Errorf("%s: %w", oQue, err))
 		}
 		for _, raw := range out.Items {
 			g, err := decodificar(raw)
@@ -359,16 +411,29 @@ func (d *Dynamo) DoMes(ctx context.Context, userID, mes string) ([]gasto.Gasto, 
 	}
 }
 
-// ExisteNaCategoria implementa app.Store: percorre a partição do usuário só
-// com as chaves e para no primeiro gasto da categoria. Leitura consistente,
-// para um gasto recém-lançado bloquear a exclusão da categoria.
+// ExisteNaCategoria implementa app.Store: percorre os gastos do usuário só
+// com as chaves e para no primeiro da categoria. Leitura consistente, para
+// um gasto recém-lançado bloquear a exclusão da categoria.
 func (d *Dynamo) ExisteNaCategoria(ctx context.Context, userID, categoriaID string) (bool, error) {
+	return d.existeGastoCom(ctx, userID, "categoriaId", categoriaID, "procurar gasto na categoria")
+}
+
+// ExisteNoCartao implementa app.Store, como ExisteNaCategoria: um gasto
+// recém-lançado bloqueia a exclusão do cartão.
+func (d *Dynamo) ExisteNoCartao(ctx context.Context, userID, cartaoID string) (bool, error) {
+	return d.existeGastoCom(ctx, userID, "cartaoId", cartaoID, "procurar gasto no cartão")
+}
+
+// existeGastoCom informa se algum gasto (SK com prefixo EXP#, que exclui os
+// cartões) tem o atributo com o valor.
+func (d *Dynamo) existeGastoCom(ctx context.Context, userID, atributo, valor, oQue string) (bool, error) {
 	in := &dynamodb.QueryInput{
-		TableName:              aws.String(d.table),
-		KeyConditionExpression: aws.String("PK = :pk AND begins_with(SK, :exp)"),
-		FilterExpression:       aws.String("categoriaId = :categoria"),
+		TableName:                aws.String(d.table),
+		KeyConditionExpression:   aws.String("PK = :pk AND begins_with(SK, :exp)"),
+		FilterExpression:         aws.String("#atributo = :valor"),
+		ExpressionAttributeNames: map[string]string{"#atributo": atributo},
 		ExpressionAttributeValues: map[string]types.AttributeValue{
-			":pk": s(PK(userID)), ":exp": s(prefixoGasto), ":categoria": s(categoriaID),
+			":pk": s(PK(userID)), ":exp": s(prefixoGasto), ":valor": s(valor),
 		},
 		ProjectionExpression: aws.String("PK, SK"),
 		ConsistentRead:       aws.Bool(true),
@@ -376,7 +441,7 @@ func (d *Dynamo) ExisteNaCategoria(ctx context.Context, userID, categoriaID stri
 	for {
 		out, err := d.api.Query(ctx, in)
 		if err != nil {
-			return false, errs.Internal(fmt.Errorf("procurar gasto na categoria: %w", err))
+			return false, errs.Internal(fmt.Errorf("%s: %w", oQue, err))
 		}
 		if len(out.Items) > 0 {
 			return true, nil

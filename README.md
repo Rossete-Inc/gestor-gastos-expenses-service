@@ -23,20 +23,26 @@ Toda operação age sobre o `userId` do envelope, que o BFF tira do token. Envel
 
 | Operação | Payload | Resposta | Erros |
 | --- | --- | --- | --- |
-| `CriarGasto` | `GastoIn` | `Gasto` | 422 `validacao` com `errors[]` (`valorCentavos`, `data`, `categoriaId`, `grupo`, `descricao`) |
+| `CriarGasto` | `GastoIn` | `Gasto` | 422 `validacao` com `errors[]` (`valorCentavos`, `data`, `categoriaId`, `grupo`, `cartaoId`, `descricao`) |
 | `ObterGasto` | `{"id"}` | `Gasto` | 404 `gasto_nao_encontrado` |
-| `AtualizarGasto` | `{"id"}` + campos do `GastoIn` | `Gasto` (com ID novo se a data mudou) | 422 `validacao`; 404 `gasto_nao_encontrado` |
+| `AtualizarGasto` | `{"id"}` + campos do `GastoIn` | `Gasto` (com ID novo se o mês de referência ou a data mudaram) | 422 `validacao`; 404 `gasto_nao_encontrado` |
 | `ExcluirGasto` | `{"id"}` | sem payload | 404 `gasto_nao_encontrado` |
-| `ListarGastos` | `{"mes","grupo?","categoriaId?","cursor?","limit?"}` | `{"items":[Gasto],"nextCursor?"}`, do mais recente para o mais antigo | 422 `validacao` (`mes`, `grupo`, `categoriaId`); 400 `cursor_invalido` |
+| `ListarGastos` | `{"mes","grupo?","categoriaId?","cartaoId?","cursor?","limit?"}` (`mes` é o de referência; `cartaoId` aceita `SEM_CARTAO`) | `{"items":[Gasto],"nextCursor?"}`, do mais recente para o mais antigo | 422 `validacao` (`mes`, `grupo`, `categoriaId`, `cartaoId`); 400 `cursor_invalido` |
 | `ExisteGastoNaCategoria` | `{"categoriaId"}` | `{"existe":bool}` | 422 `validacao` |
 | `ResumoMensal` | `{"mes"}` | `ResumoMensalOut` (abaixo) | 422 `validacao` (`mes`) |
+| `ListarCartoes` | `{}` | `{"items":[Cartao]}`, ativos e arquivados, em ordem de apelido | — |
+| `CriarCartao` | `CartaoIn` | `Cartao` | 422 `validacao` (`apelido`, inclusive duplicado entre ativos, `cor`, `diaFechamento`, `diaVencimento`, `limiteCentavos`); 409 `limite_cartoes` |
+| `AtualizarCartao` | `{"id"}` + campos do `CartaoIn` | `Cartao` | 422 `validacao`; 404 `cartao_nao_encontrado` |
+| `ArquivarCartao` | `{"id","arquivado"}` | `Cartao` | 404 `cartao_nao_encontrado`; reativar: 422 apelido duplicado, 409 `limite_cartoes` |
+| `ExcluirCartao` | `{"id"}` | sem payload | 409 `cartao_em_uso`; 404 `cartao_nao_encontrado` |
+| `ResumoCartoes` | `{"mes","hoje"}` | `{"mes","items":[{"cartao","faturaCentavos","limiteUsadoCentavos","limiteDisponivelCentavos","vencimento"}]}` | 422 `validacao` (`mes`, `hoje`) |
 
-- `GastoIn` é `{"valorCentavos","data","categoriaId","grupo","descricao?","recorrente"}`: o `GastoIn` do `openapi.yaml` do BFF mais o `grupo` da categoria.
-- `Gasto` é `{"id","valorCentavos","data","grupo","categoriaId","descricao?","recorrente"}`. O BFF troca o `categoriaId` pelo resumo da categoria (nome e cor) do schema `Gasto` do openapi.
-- `ResumoMensalOut` é `{"mes","totalCentavos","totaisPorGrupo":[{"grupo","totalCentavos"}],"totaisPorCategoria":[{"categoriaId","grupo","totalCentavos"}],"recentes":[Gasto]}`. `totaisPorGrupo` traz sempre `CARTAO` e `FIXO`, nessa ordem, mesmo zerados. `totaisPorCategoria` só tem categorias com gasto no mês, do maior total para o menor. `recentes` são até 5 gastos, na ordem da listagem. As duas somas por grupo e por categoria fecham exatamente com `totalCentavos`. Mês sem gastos devolve totais zerados e listas `[]`. O nome e a cor das categorias e os percentuais (método do maior resto) ficam com o BFF, em `/telas/dashboard`.
+- `GastoIn` é `{"valorCentavos","data","categoriaId","grupo","cartaoId?","descricao?","recorrente"}`: o `GastoIn` do `openapi.yaml` do BFF mais o `grupo` da categoria. O cartão precisa ser do usuário e estar ativo; na edição, manter o cartão atual vale mesmo arquivado. A regra "categoria `CARTAO` exige cartão" fica no BFF.
+- `Gasto` é `{"id","valorCentavos","data","mesReferencia","grupo","categoriaId","cartaoId?","descricao?","recorrente"}`. `mesReferencia` é o mês da fatura do cartão (ver Regras) ou, sem cartão, o mês da data. O BFF troca o `categoriaId` pelo resumo da categoria (nome e cor) do schema `Gasto` do openapi.
+- `ResumoMensalOut` é `{"mes","totalCentavos","totaisPorGrupo":[{"grupo","totalCentavos"}],"totaisPorCategoria":[{"categoriaId","grupo","totalCentavos"}],"recentes":[Gasto]}`. `totaisPorGrupo` traz sempre `CARTAO` e `FIXO`, nessa ordem, mesmo zerados. `totaisPorCategoria` só tem categorias com gasto no mês, do maior total para o menor. `totaisPorCartao` (`[{"cartaoId","totalCentavos"}]`, `""` = sem cartão) e `totaisPorCategoriaECartao` (`[{"categoriaId","grupo","cartaoId","totalCentavos"}]`) dividem o mesmo total por cartão. `recentes` são até 5 gastos, na ordem da listagem. As duas somas por grupo e por categoria fecham exatamente com `totalCentavos`. Mês sem gastos devolve totais zerados e listas `[]`. O nome e a cor das categorias e os percentuais (método do maior resto) ficam com o BFF, em `/telas/dashboard`.
 - A existência e a visibilidade da categoria são checadas pelo BFF no categories-service antes de `CriarGasto` e `AtualizarGasto`. O BFF também chama `ExisteGastoNaCategoria` antes de excluir uma categoria (409 `categoria_em_uso`). Ver design.md, "Regras que atravessam serviços ficam no BFF".
 
-Evento consumido: `UserDeleted` (`{"userId"}`), que apaga todos os gastos do usuário em lotes. É idempotente.
+Evento consumido: `UserDeleted` (`{"userId"}`), que apaga todos os gastos e cartões do usuário em lotes. É idempotente.
 
 ## Regras
 
@@ -45,7 +51,10 @@ Evento consumido: `UserDeleted` (`{"userId"}`), que apaga todos os gastos do usu
 - **Descrição:** opcional, até 140 caracteres, gravada em NFC e sem espaços nas pontas. Quebras de linha e outros caracteres de controle são recusados.
 - **Grupo:** `CARTAO` ou `FIXO`, o grupo da categoria, gravado no gasto para filtrar e somar sem consultar o categories-service.
 - **Recorrente:** só informativo no MVP.
-- **ID:** a data compacta, um hífen e um [ULID](https://github.com/ulid/spec), por exemplo `20261103-01JC8Z6Q3N4W5X6Y7Z8A9B0C1D`. A data no ID leva à chave do DynamoDB sem índice secundário. O ULID ordena os gastos do mesmo dia pela hora do lançamento e não muda na edição. **Se a data muda, o ID muda**: o gasto troca de chave numa transação e o antigo deixa de existir.
+- **Cartão (ADR 0009):** apelido (até 40 caracteres, único entre os ativos do usuário, sem diferenciar maiúsculas), cor `#RRGGBB`, dias de fechamento e vencimento (1 a 31) e limite em centavos. No máximo 20 ativos. Arquivado some dos formulários, mas os gastos dele continuam nos totais. Não se exclui cartão com gastos.
+- **Mês de referência (fatura):** compra até o dia de fechamento, inclusive, entra na fatura que fecha naquele mês; depois, na seguinte. A fatura vence no mês do fechamento se o dia de vencimento for maior que o de fechamento, senão no mês seguinte, e leva o nome do mês do vencimento. Dia que não existe no mês vira o último dia. Mudar os dias do cartão não recalcula os gastos já lançados. Ver `internal/cartao/fatura.go`.
+- **Limite usado:** soma dos gastos do cartão em faturas cujo vencimento ainda não passou (o dia do vencimento conta), inclusive as futuras. O disponível pode ficar negativo. Não há controle de pagamento.
+- **ID:** o mês de referência e a data compactos e um [ULID](https://github.com/ulid/spec), separados por hífen, por exemplo `202612-20261110-01JC8Z6Q3N4W5X6Y7Z8A9B0C1D`. O mês e a data no ID levam à chave do DynamoDB sem índice secundário. O ULID ordena os gastos do mesmo dia pela hora do lançamento e não muda na edição. **Se o mês de referência ou a data mudam, o ID muda**: o gasto troca de chave numa transação e o antigo deixa de existir. IDs no formato anterior (`20261103-<ULID>`) continuam aceitos até a migração.
 - **Listagem:** 20 itens por página por padrão, no máximo 100. O cursor é a chave do último gasto devolvido, em base64url e assinada com HMAC sobre o escopo da listagem (usuário, mês, grupo e categoria). Um cursor adulterado, de outra listagem ou de outro segredo responde 400 `cursor_invalido`.
 
 ## DynamoDB
@@ -54,14 +63,25 @@ Tabela `gestor-gastos-expenses`, com as chaves do contrato com o seed do infra-b
 
 | Item | PK | SK |
 | --- | --- | --- |
-| Gasto | `USER#<userId>` | `EXP#<AAAA-MM-DD>#<ULID>` |
+| Gasto | `USER#<userId>` | `EXP#<AAAA-MM ref>#<AAAA-MM-DD>#<ULID>` (legado: `EXP#<AAAA-MM-DD>#<ULID>`) |
+| Cartão | `USER#<userId>` | `CARD#<ULID>` |
 
-Atributos: `gastoId`, `valorCentavos` (número inteiro), `data`, `grupo`, `categoriaId`, `descricao` (só se houver), `recorrente`, `criadoEm` e `atualizadoEm` (só depois da primeira edição).
+Atributos do gasto: `gastoId`, `valorCentavos` (número inteiro), `data`, `mesReferencia`, `grupo`, `categoriaId`, `cartaoId` (só se houver), `descricao` (só se houver), `recorrente`, `criadoEm` e `atualizadoEm` (só depois da primeira edição). Atributos do cartão: `cartaoId`, `apelido`, `cor`, `diaFechamento`, `diaVencimento`, `limiteCentavos`, `arquivado`, `criadoEm` e `atualizadoEm`.
 
 - **Isolamento:** tudo do usuário fica na partição dele. Ler, editar ou excluir o gasto de outro usuário não encontra nada.
-- **Listagem do mês:** uma Query com `begins_with(SK, "EXP#AAAA-MM-")` em ordem decrescente. Os filtros por grupo e categoria usam `FilterExpression`. Como o `Limit` do DynamoDB conta os itens antes do filtro, o store monta a página com Queries de até 100 itens até juntar o tamanho pedido. Se a página enche exatamente no fim de uma Query que ainda tinha continuação, o cursor é devolvido mesmo sem haver mais gastos, e a página seguinte pode vir vazia, sem cursor.
-- **Resumo do mês:** uma Query com `begins_with(SK, "EXP#AAAA-MM-")`, seguindo as continuações até o fim do mês, e as somas em memória. O volume pessoal (dezenas a centenas de gastos por mês) cabe nisso; o gatilho para materializar os totais via Streams está no ADR 0002.
-- **Categoria em uso:** uma Query na partição do usuário só com as chaves, filtrando por `categoriaId` e parando no primeiro gasto encontrado.
+- **Listagem do mês:** uma Query com `begins_with(SK, "EXP#AAAA-MM")` em ordem decrescente; o prefixo pega os dois formatos de SK enquanto a migração não roda (nesse intervalo, os legados vêm antes dos atuais). Os filtros por grupo, categoria e cartão usam `FilterExpression` (`SEM_CARTAO` = `attribute_not_exists(cartaoId)`). Como o `Limit` do DynamoDB conta os itens antes do filtro, o store monta a página com Queries de até 100 itens até juntar o tamanho pedido. Se a página enche exatamente no fim de uma Query que ainda tinha continuação, o cursor é devolvido mesmo sem haver mais gastos, e a página seguinte pode vir vazia, sem cursor.
+- **Resumo do mês:** uma Query com `begins_with(SK, "EXP#AAAA-MM")`, seguindo as continuações até o fim do mês, e as somas em memória. O volume pessoal (dezenas a centenas de gastos por mês) cabe nisso; o gatilho para materializar os totais via Streams está no ADR 0002.
+- **Categoria e cartão em uso:** uma Query nos gastos do usuário (`begins_with(SK, "EXP#")`) só com as chaves, filtrando por `categoriaId` ou `cartaoId` e parando no primeiro gasto encontrado.
+- **Resumo dos cartões:** uma Query dos cartões (`CARD#`) e uma dos gastos com `SK BETWEEN "EXP#<mês>" AND "EXP$"`, a partir do menor entre o mês pedido e o mês de hoje, inclusive as faturas futuras.
+
+### Migração do mês de referência
+
+Os gastos gravados antes da change `cartoes-credito` usam a SK sem o mês. O comando `scripts/migrar-mes-referencia` regrava cada um no formato atual, com `mesReferencia` igual ao mês da data, numa transação por gasto. É idempotente: rodar de novo não encontra nada a migrar.
+
+```bash
+AWS_PROFILE=rossete.inc go run ./scripts/migrar-mes-referencia -tabela gestor-gastos-dev-expenses -simular
+AWS_PROFILE=rossete.inc go run ./scripts/migrar-mes-referencia -tabela gestor-gastos-dev-expenses
+```
 - Leituras consistentes em todas as operações, para um gasto recém-lançado aparecer na hora.
 
 ## Rodar localmente

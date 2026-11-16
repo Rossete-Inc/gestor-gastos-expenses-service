@@ -14,7 +14,7 @@ func TestNovoULID(t *testing.T) {
 	if len(a) != 26 || a == b || a[:10] != b[:10] {
 		t.Errorf("ULIDs = %s, %s", a, b)
 	}
-	if _, u, ok := PartesDoID(IDDe("2026-11-11", a)); !ok || u != a {
+	if p, ok := PartesDoID(IDDe("2026-12", "2026-11-11", a)); !ok || p.ULID != a || !ULIDValido(a) {
 		t.Errorf("ULID %s fora do formato aceito", a)
 	}
 	// Um instante depois ordena depois (lexicograficamente).
@@ -44,10 +44,21 @@ func TestCodificarULID(t *testing.T) {
 }
 
 func TestPartesDoID(t *testing.T) {
-	data, u, ok := PartesDoID("20261103-" + ulid)
-	if !ok || data != "2026-11-03" || u != ulid {
-		t.Errorf("partes = %s, %s, %v", data, u, ok)
+	id := IDDe("2026-12", "2026-11-10", ulid)
+	if id != "202612-20261110-"+ulid || len(id) != TamanhoID {
+		t.Fatalf("IDDe = %s", id)
 	}
+	p, ok := PartesDoID(id)
+	if !ok || p != (Partes{MesReferencia: "2026-12", Data: "2026-11-10", ULID: ulid}) {
+		t.Errorf("partes = %+v, %v", p, ok)
+	}
+
+	// Formato legado (antes de cartoes-credito): o mês é o da data.
+	p, ok = PartesDoID(IDLegado("2026-11-03", ulid))
+	if !ok || p != (Partes{MesReferencia: "2026-11", Data: "2026-11-03", ULID: ulid, Legado: true}) {
+		t.Errorf("partes legado = %+v, %v", p, ok)
+	}
+
 	invalidos := []string{
 		"",
 		ulid,
@@ -60,13 +71,14 @@ func TestPartesDoID(t *testing.T) {
 		"20260230-" + ulid,                 // 30 de fevereiro
 		"18991231-" + ulid,                 // antes de MinAno
 		"20261103-" + ulid[:20] + "#EXP#1", // tentativa de forjar a SK
+		"202613-20261103-" + ulid,          // mês 13
+		"202612-20260230-" + ulid,          // data inexistente
+		"189912-20261103-" + ulid,          // mês antes de MinAno
+		"2026-12-20261103-" + ulid,         // mês com hífen
 	}
 	for _, id := range invalidos {
-		if _, _, ok := PartesDoID(id); ok {
+		if _, ok := PartesDoID(id); ok {
 			t.Errorf("PartesDoID(%q) aceitou", id)
 		}
-	}
-	if TamanhoID != len("20261103-"+ulid) {
-		t.Errorf("TamanhoID = %d", TamanhoID)
 	}
 }

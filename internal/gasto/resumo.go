@@ -27,8 +27,23 @@ type TotalCategoria struct {
 	TotalCentavos int64
 }
 
-// Resumo é o resumo mensal do painel: total do mês, totais por grupo e por
-// categoria e os gastos mais recentes. Os totais são somas exatas em
+// TotalCartao é a soma dos gastos de um cartão no mês. CartaoID "" = sem
+// cartão.
+type TotalCartao struct {
+	CartaoID      string
+	TotalCentavos int64
+}
+
+// TotalCategoriaCartao é a soma de uma categoria (no grupo) num cartão.
+type TotalCategoriaCartao struct {
+	CategoriaID   string
+	Grupo         Grupo
+	CartaoID      string
+	TotalCentavos int64
+}
+
+// Resumo é o resumo mensal do painel: total do mês, totais por grupo, por
+// categoria e por cartão e os gastos mais recentes. Os totais são somas exatas em
 // centavos; os percentuais ficam com o BFF (design.md).
 type Resumo struct {
 	// Mes no formato AAAA-MM.
@@ -40,6 +55,13 @@ type Resumo struct {
 	// PorCategoria vem do maior total para o menor; empates em ordem de
 	// grupo e de ID. Só entram categorias com gasto no mês.
 	PorCategoria []TotalCategoria
+	// PorCartao vem do maior total para o menor; empates pelo ID, com ""
+	// (sem cartão) primeiro. Só entram cartões com gasto no mês.
+	PorCartao []TotalCartao
+	// PorCategoriaCartao divide PorCategoria por cartão, na mesma ordem de
+	// PorCartao dentro de cada categoria (spec painel-gastos, "Detalhe da
+	// fatia do gráfico").
+	PorCategoriaCartao []TotalCategoriaCartao
 	// Recentes são até MaxRecentes gastos, do mais recente para o mais
 	// antigo: data decrescente e, no mesmo dia, o último lançado primeiro.
 	Recentes []Gasto
@@ -49,7 +71,10 @@ type Resumo struct {
 // ordem de entrada não importa. Mês sem gastos dá totais zerados e listas
 // vazias (não nulas).
 func Resumir(mes string, gastos []Gasto) Resumo {
-	r := Resumo{Mes: mes, PorCategoria: []TotalCategoria{}, Recentes: []Gasto{}}
+	r := Resumo{
+		Mes: mes, PorCategoria: []TotalCategoria{}, PorCartao: []TotalCartao{},
+		PorCategoriaCartao: []TotalCategoriaCartao{}, Recentes: []Gasto{},
+	}
 
 	porGrupo := map[Grupo]int64{}
 	type chaveCategoria struct {
@@ -57,6 +82,12 @@ func Resumir(mes string, gastos []Gasto) Resumo {
 		grupo Grupo
 	}
 	porCategoria := map[chaveCategoria]int64{}
+	porCartao := map[string]int64{}
+	type chaveCategoriaCartao struct {
+		chaveCategoria
+		cartao string
+	}
+	porCategoriaCartao := map[chaveCategoriaCartao]int64{}
 	doMes := make([]Gasto, 0, len(gastos))
 	for _, g := range gastos {
 		if g.Mes() != mes {
@@ -66,6 +97,8 @@ func Resumir(mes string, gastos []Gasto) Resumo {
 		r.TotalCentavos += g.ValorCentavos
 		porGrupo[g.Grupo] += g.ValorCentavos
 		porCategoria[chaveCategoria{g.CategoriaID, g.Grupo}] += g.ValorCentavos
+		porCartao[g.CartaoID] += g.ValorCentavos
+		porCategoriaCartao[chaveCategoriaCartao{chaveCategoria{g.CategoriaID, g.Grupo}, g.CartaoID}] += g.ValorCentavos
 	}
 
 	r.PorGrupo = make([]TotalGrupo, 0, len(Grupos))
@@ -84,6 +117,27 @@ func Resumir(mes string, gastos []Gasto) Resumo {
 		)
 	})
 
+	for id, total := range porCartao {
+		r.PorCartao = append(r.PorCartao, TotalCartao{CartaoID: id, TotalCentavos: total})
+	}
+	slices.SortFunc(r.PorCartao, func(a, b TotalCartao) int {
+		return cmp.Or(cmp.Compare(b.TotalCentavos, a.TotalCentavos), strings.Compare(a.CartaoID, b.CartaoID))
+	})
+
+	for k, total := range porCategoriaCartao {
+		r.PorCategoriaCartao = append(r.PorCategoriaCartao, TotalCategoriaCartao{
+			CategoriaID: k.id, Grupo: k.grupo, CartaoID: k.cartao, TotalCentavos: total,
+		})
+	}
+	slices.SortFunc(r.PorCategoriaCartao, func(a, b TotalCategoriaCartao) int {
+		return cmp.Or(
+			strings.Compare(string(a.Grupo), string(b.Grupo)),
+			strings.Compare(a.CategoriaID, b.CategoriaID),
+			cmp.Compare(b.TotalCentavos, a.TotalCentavos),
+			strings.Compare(a.CartaoID, b.CartaoID),
+		)
+	})
+
 	slices.SortFunc(doMes, MaisRecentePrimeiro)
 	r.Recentes = append(r.Recentes, doMes[:min(MaxRecentes, len(doMes))]...)
 	return r
@@ -92,11 +146,21 @@ func Resumir(mes string, gastos []Gasto) Resumo {
 // Contract converte para o formato do contrato público.
 func (r Resumo) Contract() contract.ResumoMensalOut {
 	out := contract.ResumoMensalOut{
-		Mes:                r.Mes,
-		TotalCentavos:      r.TotalCentavos,
-		TotaisPorGrupo:     make([]contract.TotalGrupo, 0, len(r.PorGrupo)),
-		TotaisPorCategoria: make([]contract.TotalCategoria, 0, len(r.PorCategoria)),
-		Recentes:           make([]contract.Gasto, 0, len(r.Recentes)),
+		Mes:                       r.Mes,
+		TotalCentavos:             r.TotalCentavos,
+		TotaisPorGrupo:            make([]contract.TotalGrupo, 0, len(r.PorGrupo)),
+		TotaisPorCategoria:        make([]contract.TotalCategoria, 0, len(r.PorCategoria)),
+		TotaisPorCartao:           make([]contract.TotalCartao, 0, len(r.PorCartao)),
+		TotaisPorCategoriaECartao: make([]contract.TotalCategoriaCartao, 0, len(r.PorCategoriaCartao)),
+		Recentes:                  make([]contract.Gasto, 0, len(r.Recentes)),
+	}
+	for _, c := range r.PorCartao {
+		out.TotaisPorCartao = append(out.TotaisPorCartao, contract.TotalCartao{CartaoID: c.CartaoID, TotalCentavos: c.TotalCentavos})
+	}
+	for _, c := range r.PorCategoriaCartao {
+		out.TotaisPorCategoriaECartao = append(out.TotaisPorCategoriaECartao, contract.TotalCategoriaCartao{
+			CategoriaID: c.CategoriaID, Grupo: string(c.Grupo), CartaoID: c.CartaoID, TotalCentavos: c.TotalCentavos,
+		})
 	}
 	for _, g := range r.PorGrupo {
 		out.TotaisPorGrupo = append(out.TotaisPorGrupo, contract.TotalGrupo{Grupo: string(g.Grupo), TotalCentavos: g.TotalCentavos})

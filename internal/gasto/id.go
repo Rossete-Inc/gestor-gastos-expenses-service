@@ -8,23 +8,46 @@ import (
 	"time"
 )
 
-// O ID de um gasto é a data compacta (AAAAMMDD), um hífen e um ULID:
+// O ID de um gasto é o mês de referência compacto (AAAAMM), a data compacta
+// (AAAAMMDD) e um ULID, separados por hífen:
 //
-//	20261103-01JC8Z6Q3N4W5X6Y7Z8A9B0C1D
+//	202612-20261110-01JC8Z6Q3N4W5X6Y7Z8A9B0C1D
 //
-// A data no ID permite chegar à chave do DynamoDB (SK=EXP#AAAA-MM-DD#<ULID>)
-// sem índice secundário. O ULID ordena os gastos do mesmo dia pela hora do
-// lançamento e não muda na edição; a data muda, e com ela o ID.
+// O mês e a data no ID permitem chegar à chave do DynamoDB
+// (SK=EXP#AAAA-MM#AAAA-MM-DD#<ULID>) sem índice secundário. O ULID ordena os
+// gastos do mesmo dia pela hora do lançamento e não muda na edição; o mês de
+// referência e a data mudam, e com eles o ID.
+//
+// Antes da change cartoes-credito o ID não tinha o mês (formato legado,
+// AAAAMMDD-ULID, SK=EXP#AAAA-MM-DD#<ULID>). Os dois formatos são lidos até a
+// migração terminar (scripts/migrar-mes-referencia).
 //
 // Um ULID tem 128 bits: 48 de milissegundos desde a época Unix e 80
 // aleatórios, em 26 caracteres do base32 de Crockford (sem I, L, O e U).
 
 const alfabeto = "0123456789ABCDEFGHJKMNPQRSTVWXYZ"
 
-var padraoID = regexp.MustCompile(`^([0-9]{8})-([0-7][0-9A-HJKMNP-TV-Z]{25})$`)
+const padraoULID = `([0-7][0-9A-HJKMNP-TV-Z]{25})`
 
-// TamanhoID é o tamanho de todo ID de gasto.
-const TamanhoID = 8 + 1 + 26
+var (
+	padraoID       = regexp.MustCompile(`^([0-9]{6})-([0-9]{8})-` + padraoULID + `$`)
+	padraoIDLegado = regexp.MustCompile(`^([0-9]{8})-` + padraoULID + `$`)
+	padraoSoULID   = regexp.MustCompile(`^` + padraoULID + `$`)
+)
+
+// TamanhoID é o tamanho de todo ID de gasto no formato atual.
+const TamanhoID = 6 + 1 + 8 + 1 + 26
+
+// Partes são os componentes de um ID de gasto.
+type Partes struct {
+	// MesReferencia no formato AAAA-MM. No formato legado, o mês da data.
+	MesReferencia string
+	// Data no formato AAAA-MM-DD.
+	Data string
+	ULID string
+	// Legado indica um ID sem o mês de referência (antes da migração).
+	Legado bool
+}
 
 // NovoULID gera um ULID com o instante t.
 func NovoULID(t time.Time) string {
@@ -34,6 +57,9 @@ func NovoULID(t time.Time) string {
 	_, _ = rand.Read(b[6:])
 	return codificarULID(b)
 }
+
+// ULIDValido informa se s é um ULID.
+func ULIDValido(s string) bool { return padraoSoULID.MatchString(s) }
 
 func codificarULID(b [16]byte) string {
 	hi, lo := binary.BigEndian.Uint64(b[:8]), binary.BigEndian.Uint64(b[8:])
@@ -46,22 +72,40 @@ func codificarULID(b [16]byte) string {
 	return string(out[:])
 }
 
-// IDDe monta o ID a partir da data (AAAA-MM-DD) e do ULID.
-func IDDe(data, ulid string) string {
+// IDDe monta o ID a partir do mês de referência (AAAA-MM), da data
+// (AAAA-MM-DD) e do ULID.
+func IDDe(mesReferencia, data, ulid string) string {
+	return strings.ReplaceAll(mesReferencia, "-", "") + "-" + strings.ReplaceAll(data, "-", "") + "-" + ulid
+}
+
+// IDLegado monta o ID no formato anterior à change cartoes-credito. Só é
+// usado pela migração e pelos testes da leitura dupla.
+func IDLegado(data, ulid string) string {
 	return strings.ReplaceAll(data, "-", "") + "-" + ulid
 }
 
-// PartesDoID devolve a data (AAAA-MM-DD) e o ULID de um ID. ok é false para
-// qualquer ID fora do formato ou com data inexistente; esses IDs nunca
-// existem e nem chegam ao banco.
-func PartesDoID(id string) (data, ulid string, ok bool) {
-	m := padraoID.FindStringSubmatch(id)
-	if m == nil {
-		return "", "", false
+// PartesDoID decompõe um ID nos dois formatos. ok é false para qualquer ID
+// fora do formato ou com mês ou data inexistentes; esses IDs nunca existem e
+// nem chegam ao banco.
+func PartesDoID(id string) (p Partes, ok bool) {
+	if m := padraoID.FindStringSubmatch(id); m != nil {
+		p = Partes{MesReferencia: m[1][:4] + "-" + m[1][4:], Data: dataDe(m[2]), ULID: m[3]}
+		if !MesValido(p.MesReferencia) || !DataValida(p.Data) {
+			return Partes{}, false
+		}
+		return p, true
 	}
-	data = m[1][:4] + "-" + m[1][4:6] + "-" + m[1][6:]
-	if !DataValida(data) {
-		return "", "", false
+	if m := padraoIDLegado.FindStringSubmatch(id); m != nil {
+		p = Partes{Data: dataDe(m[1]), ULID: m[2], Legado: true}
+		if !DataValida(p.Data) {
+			return Partes{}, false
+		}
+		p.MesReferencia = p.Data[:len(LayoutMes)]
+		return p, true
 	}
-	return data, m[2], true
+	return Partes{}, false
+}
+
+func dataDe(compacta string) string {
+	return compacta[:4] + "-" + compacta[4:6] + "-" + compacta[6:]
 }

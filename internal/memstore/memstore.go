@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/Rossete-Inc/gestor-gastos-expenses-service/internal/cartao"
 	"github.com/Rossete-Inc/gestor-gastos-expenses-service/internal/gasto"
 	"github.com/Rossete-Inc/gestor-gastos-expenses-service/internal/store"
 	"github.com/Rossete-Inc/gestor-gastos-go-commons/errs"
@@ -19,12 +20,16 @@ import (
 type Store struct {
 	mu     sync.Mutex
 	gastos map[string]map[string]gasto.Gasto // userId -> SK -> gasto
+	// cartoes guarda os cartões por usuário e ID.
+	cartoes map[string]map[string]cartao.Cartao
 	// Err, se não nil, é devolvido por todas as operações.
 	Err error
 }
 
 // New cria um Store vazio.
-func New() *Store { return &Store{gastos: map[string]map[string]gasto.Gasto{}} }
+func New() *Store {
+	return &Store{gastos: map[string]map[string]gasto.Gasto{}, cartoes: map[string]map[string]cartao.Cartao{}}
+}
 
 func sk(id string) string {
 	k, _ := store.SK(id)
@@ -163,8 +168,9 @@ func (s *Store) ExcluirDoUsuario(_ context.Context, userID string) (int, error) 
 	if s.Err != nil {
 		return 0, s.Err
 	}
-	n := len(s.gastos[userID])
+	n := len(s.gastos[userID]) + len(s.cartoes[userID])
 	delete(s.gastos, userID)
+	delete(s.cartoes, userID)
 	return n, nil
 }
 

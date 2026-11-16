@@ -94,7 +94,7 @@ func TestErrosDoClientViramInternos(t *testing.T) {
 	interno(t, "obter", err)
 	interno(t, "substituir", d.Substituir(context.Background(), g, g))
 	outro := g
-	outro.ID = gasto.IDDe("2026-11-04", ulidTeste)
+	outro.ID = gasto.IDDe("2026-11", "2026-11-04", ulidTeste)
 	interno(t, "substituir com data nova", d.Substituir(context.Background(), g, outro))
 	interno(t, "excluir", d.Excluir(context.Background(), "u-1", g.ID))
 	_, _, err = d.Listar(context.Background(), "u-1", gasto.Filtro{Mes: "2026-11"}, nil, 10)
@@ -121,7 +121,7 @@ func TestCondicaoFalhaViraNaoEncontrado(t *testing.T) {
 	tce := &types.TransactionCanceledException{CancellationReasons: []types.CancellationReason{{Code: aws.String("ConditionalCheckFailed")}, {Code: aws.String("None")}}}
 	d = novoFalso(&falso{err: tce})
 	outro := g
-	outro.ID = gasto.IDDe("2026-11-04", ulidTeste)
+	outro.ID = gasto.IDDe("2026-11", "2026-11-04", ulidTeste)
 	if err := d.Substituir(context.Background(), g, outro); errs.KindOf(err) != errs.KindNotFound {
 		t.Errorf("substituir com data nova = %v", err)
 	}
@@ -139,7 +139,7 @@ func TestSubstituirOutroGasto(t *testing.T) {
 	outroUsuario.UserID = "u-2"
 	interno(t, "outro usuário", d.Substituir(context.Background(), g, outroUsuario))
 	outroULID := g
-	outroULID.ID = gasto.IDDe(g.Data, "01JC8Z6Q3N4W5X6Y7Z8A9B0C1E")
+	outroULID.ID = gasto.IDDe(g.Mes(), g.Data, "01JC8Z6Q3N4W5X6Y7Z8A9B0C1E")
 	interno(t, "outro ULID", d.Substituir(context.Background(), g, outroULID))
 	if f.transacoes != 0 {
 		t.Error("gravou")

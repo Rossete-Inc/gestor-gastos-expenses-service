@@ -9,14 +9,16 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Rossete-Inc/gestor-gastos-expenses-service/internal/cartao"
 	"github.com/Rossete-Inc/gestor-gastos-expenses-service/internal/gasto"
 	"github.com/Rossete-Inc/gestor-gastos-go-commons/errs"
 	"github.com/Rossete-Inc/gestor-gastos-go-commons/events"
 	"github.com/Rossete-Inc/gestor-gastos-go-commons/page"
 )
 
-// Store persiste gastos. Toda operação recebe o userId e só enxerga a
-// partição dele: o gasto de outro usuário simplesmente não é encontrado.
+// Store persiste gastos e cartões. Toda operação recebe o userId e só enxerga
+// a partição dele: o gasto ou cartão de outro usuário simplesmente não é
+// encontrado.
 type Store interface {
 	// Criar grava um gasto novo.
 	Criar(ctx context.Context, g gasto.Gasto) error
@@ -34,14 +36,35 @@ type Store interface {
 	// recente para o mais antigo, a partir da chave inicio (nil = do começo).
 	// proximo é a chave para continuar, ou nil quando não há mais gastos.
 	Listar(ctx context.Context, userID string, f gasto.Filtro, inicio page.Key, limite int) (itens []gasto.Gasto, proximo page.Key, err error)
-	// DoMes devolve todos os gastos do usuário no mês (AAAA-MM), do mais
-	// recente para o mais antigo. Mês sem gastos: lista vazia, sem erro.
+	// DoMes devolve todos os gastos do usuário no mês de referência
+	// (AAAA-MM), do mais recente para o mais antigo. Mês sem gastos: lista
+	// vazia, sem erro.
 	DoMes(ctx context.Context, userID, mes string) ([]gasto.Gasto, error)
+	// DesdeMes devolve os gastos com mês de referência a partir de mes,
+	// inclusive os futuros.
+	DesdeMes(ctx context.Context, userID, mes string) ([]gasto.Gasto, error)
 	// ExisteNaCategoria informa se o usuário tem algum gasto na categoria.
 	ExisteNaCategoria(ctx context.Context, userID, categoriaID string) (bool, error)
-	// ExcluirDoUsuario apaga todos os gastos do usuário e devolve quantos
-	// apagou. Sem nada para apagar, devolve 0 sem erro.
+	// ExisteNoCartao informa se o usuário tem algum gasto no cartão.
+	ExisteNoCartao(ctx context.Context, userID, cartaoID string) (bool, error)
+	// ExcluirDoUsuario apaga tudo do usuário (gastos e cartões) e devolve
+	// quantos itens apagou. Sem nada para apagar, devolve 0 sem erro.
 	ExcluirDoUsuario(ctx context.Context, userID string) (int, error)
+
+	// CriarCartao grava um cartão novo.
+	CriarCartao(ctx context.Context, c cartao.Cartao) error
+	// ObterCartao devolve o cartão id do usuário, ou
+	// errs.NotFound("cartao_nao_encontrado").
+	ObterCartao(ctx context.Context, userID, id string) (cartao.Cartao, error)
+	// ListarCartoes devolve todos os cartões do usuário, ativos e
+	// arquivados.
+	ListarCartoes(ctx context.Context, userID string) ([]cartao.Cartao, error)
+	// SubstituirCartao grava o cartão por cima do existente, ou devolve
+	// errs.NotFound("cartao_nao_encontrado").
+	SubstituirCartao(ctx context.Context, c cartao.Cartao) error
+	// ExcluirCartao apaga o cartão, ou devolve
+	// errs.NotFound("cartao_nao_encontrado").
+	ExcluirCartao(ctx context.Context, userID, id string) error
 }
 
 // Service implementa os casos de uso.
@@ -62,8 +85,16 @@ func New(store Store, cursores *page.Codec, log *slog.Logger) *Service {
 }
 
 // CriarGasto lança um gasto. A categoria já foi validada pelo BFF, que manda
-// o grupo dela.
+// o grupo dela. Com cartão, o cartão precisa ser do usuário e estar ativo, e
+// o mês de referência é o da fatura (spec cartoes-credito).
 func (s *Service) CriarGasto(ctx context.Context, userID string, d gasto.Dados) (gasto.Gasto, error) {
+	if err := gasto.ExigirUsuario(userID); err != nil {
+		return gasto.Gasto{}, err
+	}
+	d, err := s.comMesDaFatura(ctx, userID, d, "")
+	if err != nil {
+		return gasto.Gasto{}, err
+	}
 	agora := s.agora()
 	g, err := gasto.Novo(gasto.NovoULID(agora), userID, d, agora)
 	if err != nil {
@@ -72,7 +103,7 @@ func (s *Service) CriarGasto(ctx context.Context, userID string, d gasto.Dados) 
 	if err := s.store.Criar(ctx, g); err != nil {
 		return gasto.Gasto{}, err
 	}
-	s.log.InfoContext(ctx, "gasto criado", "userId", userID, "gastoId", g.ID, "grupo", g.Grupo)
+	s.log.InfoContext(ctx, "gasto criado", "userId", userID, "gastoId", g.ID, "grupo", g.Grupo, "cartaoId", g.CartaoID)
 	return g, nil
 }
 
@@ -83,7 +114,7 @@ func (s *Service) ObterGasto(ctx context.Context, userID, id string) (gasto.Gast
 	}
 	id = strings.TrimSpace(id)
 	// Um ID fora do formato nunca existe e nem chega ao banco.
-	if _, _, ok := gasto.PartesDoID(id); !ok {
+	if _, ok := gasto.PartesDoID(id); !ok {
 		return gasto.Gasto{}, gasto.ErrNaoEncontrado()
 	}
 	g, err := s.store.Obter(ctx, userID, id)
@@ -98,9 +129,15 @@ func (s *Service) ObterGasto(ctx context.Context, userID, id string) (gasto.Gast
 }
 
 // AtualizarGasto substitui os dados de um gasto do usuário, com as mesmas
-// validações do lançamento. Se a data mudar, o gasto devolvido tem outro ID.
+// validações do lançamento. O mês de referência é recalculado com os dados
+// atuais do cartão. Se o mês ou a data mudarem, o gasto devolvido tem outro
+// ID. Manter o cartão atual vale mesmo se ele estiver arquivado.
 func (s *Service) AtualizarGasto(ctx context.Context, userID, id string, d gasto.Dados) (gasto.Gasto, error) {
 	antigo, err := s.ObterGasto(ctx, userID, id)
+	if err != nil {
+		return gasto.Gasto{}, err
+	}
+	d, err = s.comMesDaFatura(ctx, userID, d, antigo.CartaoID)
 	if err != nil {
 		return gasto.Gasto{}, err
 	}
@@ -121,7 +158,7 @@ func (s *Service) ExcluirGasto(ctx context.Context, userID, id string) error {
 		return err
 	}
 	id = strings.TrimSpace(id)
-	if _, _, ok := gasto.PartesDoID(id); !ok {
+	if _, ok := gasto.PartesDoID(id); !ok {
 		return gasto.ErrNaoEncontrado()
 	}
 	if err := s.store.Excluir(ctx, userID, id); err != nil {
@@ -136,6 +173,7 @@ type Listagem struct {
 	Mes         string
 	Grupo       string
 	CategoriaID string
+	CartaoID    string
 	Cursor      string
 	Limit       int
 }
@@ -148,7 +186,7 @@ func (s *Service) ListarGastos(ctx context.Context, userID string, in Listagem) 
 	if err := gasto.ExigirUsuario(userID); err != nil {
 		return page.Page[gasto.Gasto]{}, err
 	}
-	f, err := gasto.NovoFiltro(in.Mes, in.Grupo, in.CategoriaID)
+	f, err := gasto.NovoFiltro(in.Mes, in.Grupo, in.CategoriaID, in.CartaoID)
 	if err != nil {
 		return page.Page[gasto.Gasto]{}, err
 	}
@@ -201,7 +239,7 @@ func (s *Service) ExisteGastoNaCategoria(ctx context.Context, userID, categoriaI
 	return s.store.ExisteNaCategoria(ctx, userID, categoriaID)
 }
 
-// ConsumirUserDeleted apaga todos os gastos do usuário excluído. É
+// ConsumirUserDeleted apaga todos os gastos e cartões do usuário excluído. É
 // idempotente: o mesmo evento de novo não encontra nada e não falha.
 func (s *Service) ConsumirUserDeleted(ctx context.Context, d events.UserDeletedDetail) error {
 	userID := strings.TrimSpace(d.UserID)

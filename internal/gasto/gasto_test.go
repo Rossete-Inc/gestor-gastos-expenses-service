@@ -37,7 +37,7 @@ func TestGastoDeCartao(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if g.ID != "20261103-"+ulid || g.UserID != "u-1" || g.ValorCentavos != 4590 || g.Grupo != Cartao ||
+	if g.ID != "202611-20261103-"+ulid || g.MesReferencia != "2026-11" || g.CartaoID != "" || g.UserID != "u-1" || g.ValorCentavos != 4590 || g.Grupo != Cartao ||
 		g.Mes() != "2026-11" || g.ULID() != ulid || g.Recorrente {
 		t.Errorf("gasto = %+v", g)
 	}
@@ -56,7 +56,7 @@ func TestGastoFixoRecorrente(t *testing.T) {
 		t.Errorf("gasto = %+v", g)
 	}
 	c := g.Contract()
-	if c != (contract.Gasto{ID: g.ID, ValorCentavos: 150_000, Data: "2026-11-05", Grupo: "FIXO", CategoriaID: "aluguel", Recorrente: true}) {
+	if c != (contract.Gasto{ID: g.ID, ValorCentavos: 150_000, Data: "2026-11-05", MesReferencia: "2026-11", Grupo: "FIXO", CategoriaID: "aluguel", Recorrente: true}) {
 		t.Errorf("contract = %+v", c)
 	}
 }
@@ -161,9 +161,21 @@ func TestAtualizado(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if novo.ID != "20261031-"+ulid || novo.ULID() != ulid || novo.Mes() != "2026-10" {
+	if novo.ID != "202610-20261031-"+ulid || novo.ULID() != ulid || novo.Mes() != "2026-10" {
 		t.Errorf("ID = %s", novo.ID)
 	}
+
+	// Cenário "Atribuir cartão a gasto antigo": o app manda o cartão e o mês
+	// da fatura; o ID passa a carregar o mês de referência.
+	d.Data, d.CartaoID, d.MesReferencia = "2026-11-10", "01JC8Z6Q3N4W5X6Y7Z8A9B0CAR", "2026-12"
+	novo, err = g.Atualizado(d, depois)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if novo.ID != "202612-20261110-"+ulid || novo.CartaoID != d.CartaoID || novo.Mes() != "2026-12" {
+		t.Errorf("com cartão = %+v", novo)
+	}
+	d.CartaoID, d.MesReferencia = "", ""
 
 	d.ValorCentavos = 0
 	if _, err := g.Atualizado(d, depois); camposInvalidos(t, err) != "valorCentavos" {
@@ -172,8 +184,8 @@ func TestAtualizado(t *testing.T) {
 }
 
 func TestDadosDe(t *testing.T) {
-	in := contract.GastoIn{ValorCentavos: 10, Data: "2026-11-01", CategoriaID: "c", Grupo: "FIXO", Descricao: "d", Recorrente: true}
-	if got := DadosDe(in); got != (Dados{ValorCentavos: 10, Data: "2026-11-01", CategoriaID: "c", Grupo: Fixo, Descricao: "d", Recorrente: true}) {
+	in := contract.GastoIn{ValorCentavos: 10, Data: "2026-11-01", CategoriaID: "c", Grupo: "FIXO", CartaoID: "k", Descricao: "d", Recorrente: true}
+	if got := DadosDe(in); got != (Dados{ValorCentavos: 10, Data: "2026-11-01", CategoriaID: "c", Grupo: Fixo, CartaoID: "k", Descricao: "d", Recorrente: true}) {
 		t.Errorf("dados = %+v", got)
 	}
 }
@@ -190,5 +202,38 @@ func TestMesValido(t *testing.T) {
 		if MesValido(s) != ok {
 			t.Errorf("MesValido(%q) = %v", s, !ok)
 		}
+	}
+}
+
+func TestMesReferenciaDoCartao(t *testing.T) {
+	// Cenário "Gasto de cartão" com cartão: compra em 2026-11-03 na fatura de
+	// dezembro. O mês vem pronto do app; a data continua a da compra.
+	d := almoco()
+	d.CartaoID, d.MesReferencia = "01JC8Z6Q3N4W5X6Y7Z8A9B0CAR", "2026-12"
+	g, err := Novo(ulid, "u-1", d, agora)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if g.Mes() != "2026-12" || g.Data != "2026-11-03" || g.ID != "202612-20261103-"+ulid {
+		t.Errorf("gasto = %+v", g)
+	}
+	if c := g.Contract(); c.MesReferencia != "2026-12" || c.CartaoID != d.CartaoID {
+		t.Errorf("contract = %+v", c)
+	}
+}
+
+func TestCartaoIDInvalido(t *testing.T) {
+	d := almoco()
+	d.CartaoID = strings.Repeat("x", 65)
+	if _, err := Novo(ulid, "u-1", d, agora); camposInvalidos(t, err) != "cartaoId" {
+		t.Errorf("erro = %v", err)
+	}
+}
+
+func TestMesLegadoSemMesReferencia(t *testing.T) {
+	// Gasto lido do formato legado não tem MesReferencia: o mês é o da data.
+	g := Gasto{ID: IDLegado("2026-11-03", ulid), Data: "2026-11-03"}
+	if g.Mes() != "2026-11" || g.ULID() != ulid {
+		t.Errorf("legado: mês %s, ULID %s", g.Mes(), g.ULID())
 	}
 }

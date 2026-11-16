@@ -70,7 +70,7 @@ func TestCriarObterEFormatoDoItem(t *testing.T) {
 	// O item tem as chaves do contrato e o valor como número inteiro.
 	out, err := c.GetItem(ctx, &dynamodb.GetItemInput{
 		TableName: aws.String(tabela),
-		Key:       map[string]types.AttributeValue{"PK": s("USER#u-1"), "SK": s("EXP#2026-11-03#" + g.ULID())},
+		Key:       map[string]types.AttributeValue{"PK": s("USER#u-1"), "SK": s("EXP#2026-11#2026-11-03#" + g.ULID())},
 	})
 	if err != nil || out.Item == nil {
 		t.Fatalf("item não está na chave esperada: %v", err)
@@ -78,7 +78,7 @@ func TestCriarObterEFormatoDoItem(t *testing.T) {
 	if n, ok := out.Item["valorCentavos"].(*types.AttributeValueMemberN); !ok || n.Value != "4590" {
 		t.Errorf("valorCentavos = %#v", out.Item["valorCentavos"])
 	}
-	for _, attr := range []string{"gastoId", "data", "grupo", "categoriaId", "descricao", "recorrente", "criadoEm"} {
+	for _, attr := range []string{"gastoId", "data", "mesReferencia", "grupo", "categoriaId", "descricao", "recorrente", "criadoEm"} {
 		if _, ok := out.Item[attr]; !ok {
 			t.Errorf("sem o atributo %s", attr)
 		}

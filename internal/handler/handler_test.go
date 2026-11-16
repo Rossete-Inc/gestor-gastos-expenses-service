@@ -238,7 +238,7 @@ func TestResumoMensalFormatoJSON(t *testing.T) {
 	_, r, _, _ := montar(t)
 	payload, _ := json.Marshal(contract.ResumoMensalIn{Mes: "2026-11"})
 	resp := r.Dispatch(ctx, invoke.Request{Operation: contract.OpResumoMensal, UserID: "u-1", Payload: payload})
-	quero := `{"mes":"2026-11","totalCentavos":0,"totaisPorGrupo":[{"grupo":"CARTAO","totalCentavos":0},{"grupo":"FIXO","totalCentavos":0}],"totaisPorCategoria":[],"recentes":[]}`
+	quero := `{"mes":"2026-11","totalCentavos":0,"totaisPorGrupo":[{"grupo":"CARTAO","totalCentavos":0},{"grupo":"FIXO","totalCentavos":0}],"totaisPorCategoria":[],"totaisPorCartao":[],"totaisPorCategoriaECartao":[],"recentes":[]}`
 	if string(resp.Payload) != quero {
 		t.Errorf("payload =\n%s\nquero\n%s", resp.Payload, quero)
 	}
