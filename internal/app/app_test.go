@@ -67,7 +67,7 @@ func codigo(err error) string {
 func TestCriarEObter(t *testing.T) {
 	svc, st := montar(t)
 	g := criar(t, svc, "u-1", gasto.Dados{ValorCentavos: 4590, Data: "2026-11-03", CategoriaID: "alimentacao", Grupo: gasto.Cartao, Descricao: "Almoço"})
-	if !strings.HasPrefix(g.ID, "20261103-") || st.Quantos("u-1") != 1 {
+	if !strings.HasPrefix(g.ID, "202611-20261103-") || st.Quantos("u-1") != 1 {
 		t.Fatalf("gasto = %+v", g)
 	}
 	lido, err := svc.ObterGasto(ctx, "u-1", " "+g.ID+" ")

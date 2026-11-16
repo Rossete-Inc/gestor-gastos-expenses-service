@@ -9,6 +9,7 @@ import (
 
 	"github.com/Rossete-Inc/gestor-gastos-expenses-service/contract"
 	"github.com/Rossete-Inc/gestor-gastos-expenses-service/internal/app"
+	"github.com/Rossete-Inc/gestor-gastos-expenses-service/internal/cartao"
 	"github.com/Rossete-Inc/gestor-gastos-expenses-service/internal/gasto"
 	"github.com/Rossete-Inc/gestor-gastos-go-commons/events"
 	"github.com/Rossete-Inc/gestor-gastos-go-commons/invoke"
@@ -40,7 +41,8 @@ func Invoke(svc *app.Service, log *slog.Logger) *invoke.Router {
 
 	r.Handle(contract.OpListarGastos, invoke.Typed(func(ctx context.Context, userID string, in contract.ListarGastosIn) (contract.PaginaGastos, error) {
 		pg, err := svc.ListarGastos(ctx, userID, app.Listagem{
-			Mes: in.Mes, Grupo: in.Grupo, CategoriaID: in.CategoriaID, Cursor: in.Cursor, Limit: in.Limit,
+			Mes: in.Mes, Grupo: in.Grupo, CategoriaID: in.CategoriaID, CartaoID: in.CartaoID,
+			Cursor: in.Cursor, Limit: in.Limit,
 		})
 		if err != nil {
 			return contract.PaginaGastos{}, err
@@ -63,6 +65,55 @@ func Invoke(svc *app.Service, log *slog.Logger) *invoke.Router {
 			return contract.ResumoMensalOut{}, err
 		}
 		return res.Contract(), nil
+	}))
+
+	r.Handle(contract.OpListarCartoes, invoke.Typed(func(ctx context.Context, userID string, _ struct{}) (contract.ListarCartoesOut, error) {
+		lista, err := svc.ListarCartoes(ctx, userID)
+		if err != nil {
+			return contract.ListarCartoesOut{}, err
+		}
+		out := contract.ListarCartoesOut{Items: make([]contract.Cartao, 0, len(lista))}
+		for _, c := range lista {
+			out.Items = append(out.Items, c.Contract())
+		}
+		return out, nil
+	}))
+
+	r.Handle(contract.OpCriarCartao, invoke.Typed(func(ctx context.Context, userID string, in contract.CriarCartaoIn) (contract.Cartao, error) {
+		c, err := svc.CriarCartao(ctx, userID, cartao.DadosDe(in))
+		return c.Contract(), err
+	}))
+
+	r.Handle(contract.OpAtualizarCartao, invoke.Typed(func(ctx context.Context, userID string, in contract.AtualizarCartaoIn) (contract.Cartao, error) {
+		c, err := svc.AtualizarCartao(ctx, userID, in.ID, cartao.DadosDe(in.CartaoIn))
+		return c.Contract(), err
+	}))
+
+	r.Handle(contract.OpArquivarCartao, invoke.Typed(func(ctx context.Context, userID string, in contract.ArquivarCartaoIn) (contract.Cartao, error) {
+		c, err := svc.ArquivarCartao(ctx, userID, in.ID, in.Arquivado)
+		return c.Contract(), err
+	}))
+
+	r.Handle(contract.OpExcluirCartao, invoke.Typed(func(ctx context.Context, userID string, in contract.ExcluirCartaoIn) (any, error) {
+		return nil, svc.ExcluirCartao(ctx, userID, in.ID)
+	}))
+
+	r.Handle(contract.OpResumoCartoes, invoke.Typed(func(ctx context.Context, userID string, in contract.ResumoCartoesIn) (contract.ResumoCartoesOut, error) {
+		resumos, err := svc.ResumoCartoes(ctx, userID, in.Mes, in.Hoje)
+		if err != nil {
+			return contract.ResumoCartoesOut{}, err
+		}
+		out := contract.ResumoCartoesOut{Mes: in.Mes, Items: make([]contract.ResumoCartao, 0, len(resumos))}
+		for _, r := range resumos {
+			out.Items = append(out.Items, contract.ResumoCartao{
+				Cartao:                   r.Cartao.Contract(),
+				FaturaCentavos:           r.FaturaCentavos,
+				LimiteUsadoCentavos:      r.LimiteUsadoCentavos,
+				LimiteDisponivelCentavos: r.LimiteDisponivelCentavos(),
+				Vencimento:               r.Vencimento.Format("2006-01-02"),
+			})
+		}
+		return out, nil
 	}))
 
 	return r

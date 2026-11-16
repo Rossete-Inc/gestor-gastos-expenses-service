@@ -6,19 +6,19 @@ import (
 )
 
 func TestNovoFiltro(t *testing.T) {
-	f, err := NovoFiltro(" 2026-11 ", " FIXO ", " aluguel ")
+	f, err := NovoFiltro(" 2026-11 ", " FIXO ", " aluguel ", " SEM_CARTAO ")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if f != (Filtro{Mes: "2026-11", Grupo: Fixo, CategoriaID: "aluguel"}) {
+	if f != (Filtro{Mes: "2026-11", Grupo: Fixo, CategoriaID: "aluguel", CartaoID: SemCartao}) {
 		t.Errorf("filtro = %+v", f)
 	}
-	if f, err := NovoFiltro("2026-11", "", ""); err != nil || f.Grupo != "" || f.CategoriaID != "" {
+	if f, err := NovoFiltro("2026-11", "", "", ""); err != nil || f.Grupo != "" || f.CategoriaID != "" || f.CartaoID != "" {
 		t.Errorf("sem filtros = %+v, %v", f, err)
 	}
 
-	_, err = NovoFiltro("2026-13", "OUTRO", strings.Repeat("a", 65))
-	if got := camposInvalidos(t, err); got != "mes,grupo,categoriaId" {
+	_, err = NovoFiltro("2026-13", "OUTRO", strings.Repeat("a", 65), strings.Repeat("c", 65))
+	if got := camposInvalidos(t, err); got != "mes,grupo,categoriaId,cartaoId" {
 		t.Errorf("campos = %s", got)
 	}
 }
@@ -50,10 +50,33 @@ func TestEscopoDistingueListagens(t *testing.T) {
 		Filtro{Mes: "2026-10"}.Escopo("u-1"),
 		Filtro{Mes: "2026-11", Grupo: Cartao}.Escopo("u-1"),
 		Filtro{Mes: "2026-11", CategoriaID: "lazer"}.Escopo("u-1"),
+		Filtro{Mes: "2026-11", CartaoID: "k1"}.Escopo("u-1"),
+		Filtro{Mes: "2026-11", CartaoID: SemCartao}.Escopo("u-1"),
 	} {
 		if escopos[e] {
 			t.Errorf("escopo repetido: %s", e)
 		}
 		escopos[e] = true
+	}
+}
+
+func TestFiltroPorCartao(t *testing.T) {
+	semCartao, _ := Novo(ulid, "u-1", almoco(), agora)
+	d := almoco()
+	d.CartaoID = "k1"
+	noCartao, _ := Novo(ulid, "u-1", d, agora)
+	casos := []struct {
+		f        Filtro
+		sem, com bool
+	}{
+		{Filtro{Mes: "2026-11"}, true, true},
+		{Filtro{Mes: "2026-11", CartaoID: "k1"}, false, true},
+		{Filtro{Mes: "2026-11", CartaoID: "k2"}, false, false},
+		{Filtro{Mes: "2026-11", CartaoID: SemCartao}, true, false},
+	}
+	for _, c := range casos {
+		if c.f.Aceita(semCartao) != c.sem || c.f.Aceita(noCartao) != c.com {
+			t.Errorf("%+v: sem cartão %v, no cartão %v", c.f, c.f.Aceita(semCartao), c.f.Aceita(noCartao))
+		}
 	}
 }

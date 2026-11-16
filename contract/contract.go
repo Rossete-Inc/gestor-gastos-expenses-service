@@ -12,6 +12,10 @@
 // A existência e a visibilidade da categoria são checadas pelo BFF no
 // categories-service antes de CriarGasto e AtualizarGasto. O BFF manda o
 // grupo da categoria, que o serviço grava desnormalizado no gasto.
+//
+// Cartões (ADR 0009) moram aqui: o serviço valida o cartão do gasto (existe,
+// é do usuário e está ativo) e calcula o mês de referência pela fatura. A
+// regra "categoria CARTAO exige cartão" fica no BFF, que conhece o grupo.
 package contract
 
 import "github.com/Rossete-Inc/gestor-gastos-go-commons/page"
@@ -47,7 +51,34 @@ const (
 	// centavos e os 5 gastos mais recentes, para o painel. Mês sem gastos:
 	// totais zerados e listas vazias. Mês inválido: 422 "validacao" (mes).
 	OpResumoMensal = "ResumoMensal"
+
+	// OpListarCartoes devolve ListarCartoesOut com todos os cartões do
+	// usuário, ativos e arquivados, em ordem de apelido.
+	OpListarCartoes = "ListarCartoes"
+	// OpCriarCartao cadastra um cartão com CartaoIn e devolve o Cartao.
+	// Dados inválidos ou apelido já usado por cartão ativo: 422 "validacao"
+	// (apelido, cor, diaFechamento, diaVencimento, limiteCentavos). Já com
+	// 20 cartões ativos: 409 "limite_cartoes".
+	OpCriarCartao = "CriarCartao"
+	// OpAtualizarCartao substitui os dados do cartão AtualizarCartaoIn.ID,
+	// com as validações de CriarCartao. Os gastos já lançados mantêm o mês de
+	// referência. Inexistente ou de outro usuário: 404
+	// "cartao_nao_encontrado".
+	OpAtualizarCartao = "AtualizarCartao"
+	// OpArquivarCartao arquiva (Arquivado=true) ou reativa o cartão.
+	// Reativar segue as regras de apelido único e de limite de ativos.
+	OpArquivarCartao = "ArquivarCartao"
+	// OpExcluirCartao exclui um cartão sem gastos. Com gastos: 409
+	// "cartao_em_uso". Sem payload na resposta.
+	OpExcluirCartao = "ExcluirCartao"
+	// OpResumoCartoes devolve ResumoCartoesOut: para cada cartão, a fatura
+	// do mês pedido e o limite usado e disponível na data Hoje.
+	OpResumoCartoes = "ResumoCartoes"
 )
+
+// SemCartao é o valor do filtro ListarGastosIn.CartaoID que seleciona os
+// gastos sem cartão.
+const SemCartao = "SEM_CARTAO"
 
 // Grupos de gasto, iguais aos do categories-service.
 const (
@@ -60,6 +91,10 @@ const (
 	CodigoNaoEncontrado  = "gasto_nao_encontrado"
 	CodigoUsuarioAusente = "usuario_ausente"
 	CodigoCursorInvalido = "cursor_invalido"
+
+	CodigoCartaoNaoEncontrado = "cartao_nao_encontrado"
+	CodigoCartaoEmUso         = "cartao_em_uso"
+	CodigoLimiteCartoes       = "limite_cartoes"
 )
 
 // Limites de valor, em centavos: de R$ 0,01 a R$ 1.000.000,00 (openapi:
@@ -81,6 +116,11 @@ type Gasto struct {
 	CategoriaID string `json:"categoriaId"`
 	Descricao   string `json:"descricao,omitempty"`
 	Recorrente  bool   `json:"recorrente"`
+	// CartaoID vazio = sem cartão.
+	CartaoID string `json:"cartaoId,omitempty"`
+	// MesReferencia (AAAA-MM) é o mês em que o gasto conta: o da fatura do
+	// cartão, ou o da data sem cartão.
+	MesReferencia string `json:"mesReferencia"`
 }
 
 // GastoIn são os dados de um gasto, iguais ao GastoIn do openapi mais o
@@ -92,6 +132,10 @@ type GastoIn struct {
 	Grupo         string `json:"grupo"`
 	Descricao     string `json:"descricao,omitempty"`
 	Recorrente    bool   `json:"recorrente"`
+	// CartaoID é um cartão ativo do usuário. Vazio = sem cartão. Cartão
+	// inexistente, alheio ou arquivado: 422 "validacao" (cartaoId). Na
+	// edição, manter o cartão atual vale mesmo se ele estiver arquivado.
+	CartaoID string `json:"cartaoId,omitempty"`
 }
 
 // CriarGastoIn é o payload de CriarGasto.
@@ -122,6 +166,9 @@ type ListarGastosIn struct {
 	Grupo string `json:"grupo,omitempty"`
 	// CategoriaID filtra pela categoria. Vazio = todas.
 	CategoriaID string `json:"categoriaId,omitempty"`
+	// CartaoID filtra pelo cartão; SemCartao = só os sem cartão. Vazio =
+	// todos.
+	CartaoID string `json:"cartaoId,omitempty"`
 	// Cursor é o NextCursor da página anterior. Vazio = primeira página.
 	Cursor string `json:"cursor,omitempty"`
 	// Limit de itens por página: padrão 20, máximo 100.
@@ -162,6 +209,13 @@ type ResumoMensalOut struct {
 	// para o menor (empates por grupo e ID). A chave é o par categoria e
 	// grupo, o grupo gravado em cada gasto.
 	TotaisPorCategoria []TotalCategoria `json:"totaisPorCategoria"`
+	// TotaisPorCartao só tem cartões com gasto no mês, mais CartaoID ""
+	// para os gastos sem cartão, do maior total para o menor. A soma é
+	// TotalCentavos.
+	TotaisPorCartao []TotalCartao `json:"totaisPorCartao"`
+	// TotaisPorCategoriaECartao divide cada TotalCategoria por cartão
+	// (CartaoID "" = sem cartão), para o detalhe da fatia do gráfico.
+	TotaisPorCategoriaECartao []TotalCategoriaCartao `json:"totaisPorCategoriaECartao"`
 	// Recentes são até 5 gastos, do mais recente para o mais antigo, como
 	// em ListarGastos.
 	Recentes []Gasto `json:"recentes"`
@@ -179,4 +233,93 @@ type TotalCategoria struct {
 	CategoriaID   string `json:"categoriaId"`
 	Grupo         string `json:"grupo"`
 	TotalCentavos int64  `json:"totalCentavos"`
+}
+
+// TotalCartao é a soma dos gastos de um cartão no mês. CartaoID "" = sem
+// cartão.
+type TotalCartao struct {
+	CartaoID      string `json:"cartaoId"`
+	TotalCentavos int64  `json:"totalCentavos"`
+}
+
+// TotalCategoriaCartao é a soma de uma categoria (no grupo) num cartão.
+type TotalCategoriaCartao struct {
+	CategoriaID   string `json:"categoriaId"`
+	Grupo         string `json:"grupo"`
+	CartaoID      string `json:"cartaoId"`
+	TotalCentavos int64  `json:"totalCentavos"`
+}
+
+// Cartao é a resposta de CriarCartao, AtualizarCartao e ArquivarCartao e o
+// item de ListarCartoesOut.
+type Cartao struct {
+	ID             string `json:"id"`
+	Apelido        string `json:"apelido"`
+	Cor            string `json:"cor"`
+	DiaFechamento  int    `json:"diaFechamento"`
+	DiaVencimento  int    `json:"diaVencimento"`
+	LimiteCentavos int64  `json:"limiteCentavos"`
+	Arquivado      bool   `json:"arquivado"`
+}
+
+// CartaoIn são os dados de um cartão.
+type CartaoIn struct {
+	Apelido        string `json:"apelido"`
+	Cor            string `json:"cor"`
+	DiaFechamento  int    `json:"diaFechamento"`
+	DiaVencimento  int    `json:"diaVencimento"`
+	LimiteCentavos int64  `json:"limiteCentavos"`
+}
+
+// CriarCartaoIn é o payload de CriarCartao.
+type CriarCartaoIn = CartaoIn
+
+// AtualizarCartaoIn é o payload de AtualizarCartao.
+type AtualizarCartaoIn struct {
+	ID string `json:"id"`
+	CartaoIn
+}
+
+// ArquivarCartaoIn é o payload de ArquivarCartao.
+type ArquivarCartaoIn struct {
+	ID        string `json:"id"`
+	Arquivado bool   `json:"arquivado"`
+}
+
+// ExcluirCartaoIn é o payload de ExcluirCartao.
+type ExcluirCartaoIn struct {
+	ID string `json:"id"`
+}
+
+// ListarCartoesOut é a resposta de ListarCartoes, com items sempre presente.
+type ListarCartoesOut struct {
+	Items []Cartao `json:"items"`
+}
+
+// ResumoCartoesIn é o payload de ResumoCartoes.
+type ResumoCartoesIn struct {
+	// Mes (AAAA-MM) da fatura exibida. Obrigatório.
+	Mes string `json:"mes"`
+	// Hoje (AAAA-MM-DD) na data local do usuário, que o BFF calcula em
+	// America/Sao_Paulo. Faturas com vencimento antes de Hoje não contam no
+	// limite usado.
+	Hoje string `json:"hoje"`
+}
+
+// ResumoCartoesOut é a resposta de ResumoCartoes, um item por cartão (ativos
+// e arquivados), na ordem de ListarCartoes.
+type ResumoCartoesOut struct {
+	Mes   string         `json:"mes"`
+	Items []ResumoCartao `json:"items"`
+}
+
+// ResumoCartao é a fatura do mês e o limite de um cartão. O disponível é
+// LimiteCentavos menos LimiteUsadoCentavos e pode ser negativo.
+type ResumoCartao struct {
+	Cartao                   Cartao `json:"cartao"`
+	FaturaCentavos           int64  `json:"faturaCentavos"`
+	LimiteUsadoCentavos      int64  `json:"limiteUsadoCentavos"`
+	LimiteDisponivelCentavos int64  `json:"limiteDisponivelCentavos"`
+	// Vencimento (AAAA-MM-DD) da fatura do mês pedido.
+	Vencimento string `json:"vencimento"`
 }
