@@ -53,16 +53,11 @@ func TestPartesDoID(t *testing.T) {
 		t.Errorf("partes = %+v, %v", p, ok)
 	}
 
-	// Formato legado (antes de cartoes-credito): o mês é o da data.
-	p, ok = PartesDoID(IDLegado("2026-11-03", ulid))
-	if !ok || p != (Partes{MesReferencia: "2026-11", Data: "2026-11-03", ULID: ulid, Legado: true}) {
-		t.Errorf("partes legado = %+v, %v", p, ok)
-	}
-
 	invalidos := []string{
 		"",
 		ulid,
 		"20261103" + ulid,
+		"20261103-" + ulid, // formato anterior a cartoes-credito, sem o mês
 		"2026110-" + ulid,
 		"20261103-" + strings.ToLower(ulid),
 		"20261103-8" + ulid[1:],            // acima do maior ULID

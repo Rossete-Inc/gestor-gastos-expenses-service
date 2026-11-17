@@ -3,16 +3,12 @@
 package store
 
 import (
-	"strconv"
 	"testing"
 	"time"
 
 	"github.com/Rossete-Inc/gestor-gastos-expenses-service/internal/cartao"
 	"github.com/Rossete-Inc/gestor-gastos-expenses-service/internal/gasto"
 	"github.com/Rossete-Inc/gestor-gastos-go-commons/errs"
-	"github.com/aws/aws-sdk-go-v2/aws"
-	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
-	"github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
 )
 
 // lancarNoCartao grava um gasto com cartão e mês de referência informados
@@ -33,37 +29,14 @@ func lancarNoCartao(t *testing.T, d *Dynamo, userID, data, mesRef, cartaoID stri
 	return g
 }
 
-// gravarLegado grava um gasto no formato anterior a cartoes-credito, como os
-// que já estão na tabela de dev: SK EXP#<data>#<ULID>, sem mesReferencia e
-// sem cartaoId.
-func gravarLegado(t *testing.T, c *dynamodb.Client, tabela, userID, data string, centavos int64) gasto.Gasto {
-	t.Helper()
-	relogio = relogio.Add(time.Millisecond)
-	ulid := gasto.NovoULID(relogio)
-	id := gasto.IDLegado(data, ulid)
-	_, err := c.PutItem(ctx, &dynamodb.PutItemInput{TableName: aws.String(tabela), Item: map[string]types.AttributeValue{
-		"PK": s("USER#" + userID), "SK": s("EXP#" + data + "#" + ulid), "gastoId": s(id),
-		"valorCentavos": &types.AttributeValueMemberN{Value: itoa(centavos)}, "data": s(data),
-		"grupo": s("CARTAO"), "categoriaId": s("lazer"), "recorrente": &types.AttributeValueMemberBOOL{Value: false},
-		"criadoEm": s(relogio.UTC().Format(formatoData)),
-	}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	return gasto.Gasto{ID: id, UserID: userID, ValorCentavos: centavos, Data: data, MesReferencia: data[:7],
-		Grupo: gasto.Cartao, CategoriaID: "lazer", CriadoEm: relogio.UTC().Truncate(time.Millisecond)}
-}
-
-func itoa(n int64) string { return strconv.FormatInt(n, 10) }
-
-func TestLeituraDuplaDoFormatoLegado(t *testing.T) {
-	d, c, tabela := tabelaDeTeste(t)
-	legado := gravarLegado(t, c, tabela, "u-1", "2026-11-03", 100)
+func TestMesDeReferenciaDaFatura(t *testing.T) {
+	d, _, _ := tabelaDeTeste(t)
+	semCartao := lancar(t, d, "u-1", "2026-11-03", "lazer", gasto.Cartao, 100)
 	atual := lancarNoCartao(t, d, "u-1", "2026-10-28", "2026-11", "k1", 200) // fatura de novembro
 
-	lido, err := d.Obter(ctx, "u-1", legado.ID)
+	lido, err := d.Obter(ctx, "u-1", semCartao.ID)
 	if err != nil || lido.Mes() != "2026-11" || lido.CartaoID != "" || lido.ValorCentavos != 100 {
-		t.Fatalf("obter legado = %+v, %v", lido, err)
+		t.Fatalf("obter sem cartão = %+v, %v", lido, err)
 	}
 
 	doMes, err := d.DoMes(ctx, "u-1", "2026-11")
@@ -78,14 +51,14 @@ func TestLeituraDuplaDoFormatoLegado(t *testing.T) {
 		t.Errorf("a compra de 28/10 na fatura de novembro não conta em outubro: %v", fora)
 	}
 
-	// Editar o legado grava no formato atual e apaga a chave antiga.
-	novo := legado
-	novo.ID = gasto.IDDe("2026-12", "2026-11-03", legado.ULID())
+	// Atribuir um cartão muda o mês de referência, a chave e o ID; a antiga some.
+	novo := semCartao
+	novo.ID = gasto.IDDe("2026-12", "2026-11-03", semCartao.ULID())
 	novo.MesReferencia, novo.CartaoID = "2026-12", "k1"
-	if err := d.Substituir(ctx, legado, novo); err != nil {
+	if err := d.Substituir(ctx, semCartao, novo); err != nil {
 		t.Fatal(err)
 	}
-	naoEncontrado(t, "obter o ID legado depois de editar", func() error { _, err := d.Obter(ctx, "u-1", legado.ID); return err }())
+	naoEncontrado(t, "obter o ID antigo depois de editar", func() error { _, err := d.Obter(ctx, "u-1", semCartao.ID); return err }())
 	if g, err := d.Obter(ctx, "u-1", novo.ID); err != nil || g.Mes() != "2026-12" || g.CartaoID != "k1" {
 		t.Errorf("obter editado = %+v, %v", g, err)
 	}
@@ -159,11 +132,11 @@ func TestCartoesCRUDEIsolamento(t *testing.T) {
 }
 
 func TestFiltroEExistenciaPorCartao(t *testing.T) {
-	d, c, tabela := tabelaDeTeste(t)
+	d, _, _ := tabelaDeTeste(t)
 	k1 := lancarNoCartao(t, d, "u-1", "2026-11-10", "2026-12", "k1", 100)
 	lancarNoCartao(t, d, "u-1", "2026-11-11", "2026-12", "k2", 200)
 	sem := lancar(t, d, "u-1", "2026-12-03", "aluguel", gasto.Fixo, 300)
-	gravarLegado(t, c, tabela, "u-1", "2026-12-04", 400)
+	lancar(t, d, "u-1", "2026-12-04", "lazer", gasto.Cartao, 400) // sem cartão
 
 	casos := []struct {
 		cartao string
@@ -192,9 +165,9 @@ func TestFiltroEExistenciaPorCartao(t *testing.T) {
 }
 
 func TestDesdeMes(t *testing.T) {
-	d, c, tabela := tabelaDeTeste(t)
+	d, _, _ := tabelaDeTeste(t)
 	lancarNoCartao(t, d, "u-1", "2026-09-10", "2026-10", "k1", 1)
-	gravarLegado(t, c, tabela, "u-1", "2026-11-03", 2)
+	lancar(t, d, "u-1", "2026-11-03", "lazer", gasto.Cartao, 2)
 	lancarNoCartao(t, d, "u-1", "2026-11-10", "2026-12", "k1", 3)
 	lancarNoCartao(t, d, "u-1", "2026-12-10", "2027-01", "k1", 4)
 	lancar(t, d, "u-2", "2026-12-01", "lazer", gasto.Cartao, 5)

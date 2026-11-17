@@ -229,11 +229,3 @@ func TestCartaoIDInvalido(t *testing.T) {
 		t.Errorf("erro = %v", err)
 	}
 }
-
-func TestMesLegadoSemMesReferencia(t *testing.T) {
-	// Gasto lido do formato legado não tem MesReferencia: o mês é o da data.
-	g := Gasto{ID: IDLegado("2026-11-03", ulid), Data: "2026-11-03"}
-	if g.Mes() != "2026-11" || g.ULID() != ulid {
-		t.Errorf("legado: mês %s, ULID %s", g.Mes(), g.ULID())
-	}
-}
