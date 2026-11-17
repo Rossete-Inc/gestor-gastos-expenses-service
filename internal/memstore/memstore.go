@@ -11,6 +11,7 @@ import (
 
 	"github.com/Rossete-Inc/gestor-gastos-expenses-service/internal/cartao"
 	"github.com/Rossete-Inc/gestor-gastos-expenses-service/internal/gasto"
+	"github.com/Rossete-Inc/gestor-gastos-expenses-service/internal/serie"
 	"github.com/Rossete-Inc/gestor-gastos-expenses-service/internal/store"
 	"github.com/Rossete-Inc/gestor-gastos-go-commons/errs"
 	"github.com/Rossete-Inc/gestor-gastos-go-commons/page"
@@ -22,13 +23,19 @@ type Store struct {
 	gastos map[string]map[string]gasto.Gasto // userId -> SK -> gasto
 	// cartoes guarda os cartões por usuário e ID.
 	cartoes map[string]map[string]cartao.Cartao
+	// series guarda as séries por usuário e ID.
+	series map[string]map[string]serie.Serie
 	// Err, se não nil, é devolvido por todas as operações.
 	Err error
 }
 
 // New cria um Store vazio.
 func New() *Store {
-	return &Store{gastos: map[string]map[string]gasto.Gasto{}, cartoes: map[string]map[string]cartao.Cartao{}}
+	return &Store{
+		gastos:  map[string]map[string]gasto.Gasto{},
+		cartoes: map[string]map[string]cartao.Cartao{},
+		series:  map[string]map[string]serie.Serie{},
+	}
 }
 
 func sk(id string) string {
@@ -168,9 +175,10 @@ func (s *Store) ExcluirDoUsuario(_ context.Context, userID string) (int, error) 
 	if s.Err != nil {
 		return 0, s.Err
 	}
-	n := len(s.gastos[userID]) + len(s.cartoes[userID])
+	n := len(s.gastos[userID]) + len(s.cartoes[userID]) + len(s.series[userID])
 	delete(s.gastos, userID)
 	delete(s.cartoes, userID)
+	delete(s.series, userID)
 	return n, nil
 }
 

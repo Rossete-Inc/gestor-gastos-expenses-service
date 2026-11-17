@@ -24,7 +24,11 @@ import "github.com/Rossete-Inc/gestor-gastos-go-commons/page"
 const (
 	// OpCriarGasto lança um gasto com CriarGastoIn e devolve o Gasto criado.
 	// Dados inválidos: 422 "validacao" com os campos (valorCentavos, data,
-	// categoriaId, grupo, descricao).
+	// categoriaId, grupo, descricao, parcelas, parcelaAtual, mesFinal).
+	// Parcelado: cria a série e todas as parcelas e devolve a 1ª criada.
+	// Recorrente: cria a série e a ocorrência do mês da data, que é a
+	// devolvida; as dos meses seguintes nascem na leitura de cada mês. Com
+	// ChaveIdempotencia repetida, não cria nada e devolve o mesmo gasto.
 	OpCriarGasto = "CriarGasto"
 	// OpObterGasto devolve o Gasto de ObterGastoIn.ID. Inexistente ou de
 	// outro usuário: 404 "gasto_nao_encontrado".
@@ -34,9 +38,13 @@ const (
 	// CriarGasto, e devolve o Gasto atualizado. O ID carrega a data do gasto:
 	// se a data muda, o gasto devolvido tem um ID novo e o antigo deixa de
 	// existir. Inexistente ou de outro usuário: 404 "gasto_nao_encontrado".
+	// Gasto de série exige Escopo (422 "validacao", campo escopo); com
+	// PROXIMAS ou TODAS só o dia da data vale para a série, e mudar o mês da
+	// data é 422 (campo data).
 	OpAtualizarGasto = "AtualizarGasto"
 	// OpExcluirGasto exclui o gasto ExcluirGastoIn.ID. Sem payload na
 	// resposta. Inexistente ou de outro usuário: 404 "gasto_nao_encontrado".
+	// Gasto de série exige Escopo, como em AtualizarGasto.
 	OpExcluirGasto = "ExcluirGasto"
 	// OpListarGastos devolve PaginaGastos com os gastos do mês, do mais
 	// recente para o mais antigo, com filtros opcionais por grupo e
@@ -80,6 +88,35 @@ const (
 // gastos sem cartão.
 const SemCartao = "SEM_CARTAO"
 
+// Séries (spec parcelamentos-recorrencias).
+const (
+	// SerieParcelamento é uma compra parcelada: todas as parcelas são
+	// criadas no lançamento.
+	SerieParcelamento = "PARCELAMENTO"
+	// SerieRecorrencia é um gasto mensal: cada ocorrência é criada na
+	// primeira leitura do mês.
+	SerieRecorrencia = "RECORRENCIA"
+
+	// ModoTotal divide GastoIn.ValorCentavos (o total) pelas parcelas, com o
+	// resto na 1ª.
+	ModoTotal = "TOTAL"
+	// ModoParcela usa GastoIn.ValorCentavos como o valor de cada parcela,
+	// da ParcelaAtual em diante.
+	ModoParcela = "PARCELA"
+
+	// EscopoEsta altera só o gasto, que fica "ajustado" e não muda mais com
+	// a série.
+	EscopoEsta = "ESTA"
+	// EscopoProximas altera o gasto e os seguintes da série.
+	EscopoProximas = "PROXIMAS"
+	// EscopoTodas altera a série inteira.
+	EscopoTodas = "TODAS"
+
+	// MinParcelas e MaxParcelas limitam o número de parcelas.
+	MinParcelas = 2
+	MaxParcelas = 72
+)
+
 // Grupos de gasto, iguais aos do categories-service.
 const (
 	GrupoCartao = "CARTAO"
@@ -121,6 +158,24 @@ type Gasto struct {
 	// MesReferencia (AAAA-MM) é o mês em que o gasto conta: o da fatura do
 	// cartão, ou o da data sem cartão.
 	MesReferencia string `json:"mesReferencia"`
+	// Serie identifica o parcelamento ou a recorrência do gasto; ausente no
+	// gasto avulso.
+	Serie *SerieGasto `json:"serie,omitempty"`
+}
+
+// SerieGasto é a posição de um gasto na série.
+type SerieGasto struct {
+	ID string `json:"id"`
+	// Tipo é SerieParcelamento ou SerieRecorrencia.
+	Tipo string `json:"tipo"`
+	// Numero é a parcela (n de "n/N") ou, na recorrência, a ocorrência a
+	// partir do mês inicial (1 = o primeiro mês).
+	Numero int `json:"numero"`
+	// Total de parcelas; ausente na recorrência.
+	Total int `json:"total,omitempty"`
+	// Ajustado indica um gasto editado com EscopoEsta, que não muda mais com
+	// a série.
+	Ajustado bool `json:"ajustado,omitempty"`
 }
 
 // GastoIn são os dados de um gasto, iguais ao GastoIn do openapi mais o
@@ -138,14 +193,47 @@ type GastoIn struct {
 	CartaoID string `json:"cartaoId,omitempty"`
 }
 
-// CriarGastoIn é o payload de CriarGasto.
-type CriarGastoIn = GastoIn
+// CriarGastoIn é o payload de CriarGasto: os dados do gasto e, no máximo,
+// um entre Parcelamento e Recorrencia.
+type CriarGastoIn struct {
+	GastoIn
+	Parcelamento *ParcelamentoIn `json:"parcelamento,omitempty"`
+	Recorrencia  *RecorrenciaIn  `json:"recorrencia,omitempty"`
+	// ChaveIdempotencia é o Idempotency-Key do front, repassado pelo BFF:
+	// reenviar o mesmo lançamento parcelado ou recorrente não duplica a
+	// série. Vazio = sem idempotência.
+	ChaveIdempotencia string `json:"chaveIdempotencia,omitempty"`
+}
+
+// ParcelamentoIn descreve um lançamento parcelado.
+type ParcelamentoIn struct {
+	// Modo é ModoTotal ou ModoParcela.
+	Modo string `json:"modo"`
+	// Parcelas é o total de parcelas (MinParcelas a MaxParcelas). No
+	// ModoParcela pode vir vazio quando há MesFinal.
+	Parcelas int `json:"parcelas,omitempty"`
+	// ParcelaAtual (ModoParcela) é a parcela da data informada; padrão 1.
+	ParcelaAtual int `json:"parcelaAtual,omitempty"`
+	// MesFinal (AAAA-MM, ModoParcela) é o mês de referência da última
+	// parcela, que define Parcelas.
+	MesFinal string `json:"mesFinal,omitempty"`
+}
+
+// RecorrenciaIn descreve um lançamento recorrente.
+type RecorrenciaIn struct {
+	// MesFinal (AAAA-MM) é o mês da data da última ocorrência; vazio = até
+	// ser encerrada.
+	MesFinal string `json:"mesFinal,omitempty"`
+}
 
 // AtualizarGastoIn é o payload de AtualizarGasto: o ID e os dados novos, no
 // mesmo nível do JSON.
 type AtualizarGastoIn struct {
 	ID string `json:"id"`
 	GastoIn
+	// Escopo é EscopoEsta, EscopoProximas ou EscopoTodas; obrigatório no
+	// gasto de série e ignorado no avulso.
+	Escopo string `json:"escopo,omitempty"`
 }
 
 // ObterGastoIn é o payload de ObterGasto.
@@ -156,6 +244,8 @@ type ObterGastoIn struct {
 // ExcluirGastoIn é o payload de ExcluirGasto.
 type ExcluirGastoIn struct {
 	ID string `json:"id"`
+	// Escopo, como em AtualizarGastoIn.
+	Escopo string `json:"escopo,omitempty"`
 }
 
 // ListarGastosIn é o payload de ListarGastos.

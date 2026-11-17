@@ -74,7 +74,27 @@ type Gasto struct {
 	CriadoEm   time.Time
 	// AtualizadoEm é zero até a primeira edição.
 	AtualizadoEm time.Time
+	// Serie é a posição do gasto num parcelamento ou numa recorrência;
+	// SerieID vazio = gasto avulso.
+	Serie Posicao
 }
+
+// Posicao é a posição de um gasto numa série (spec
+// parcelamentos-recorrencias).
+type Posicao struct {
+	SerieID string
+	// Tipo é contract.SerieParcelamento ou contract.SerieRecorrencia.
+	Tipo string
+	// Numero é a parcela, ou a ocorrência contada do mês inicial (1 = ele).
+	Numero int
+	// Total de parcelas; 0 na recorrência.
+	Total int
+	// Ajustado: editado com "só esta"; a série não o altera mais.
+	Ajustado bool
+}
+
+// DaSerie informa se o gasto pertence a um parcelamento ou recorrência.
+func (g Gasto) DaSerie() bool { return g.Serie.SerieID != "" }
 
 // Dados são os campos que o usuário informa ao lançar ou editar um gasto,
 // mais o mês de referência, que o app calcula pelo cartão.
@@ -276,8 +296,24 @@ func (g Gasto) Contract() contract.Gasto {
 		CategoriaID:   g.CategoriaID,
 		CartaoID:      g.CartaoID,
 		Descricao:     g.Descricao,
-		Recorrente:    g.Recorrente,
+		Recorrente:    g.Recorrente || g.Serie.Tipo == contract.SerieRecorrencia,
+		Serie:         g.Serie.contract(),
 	}
+}
+
+// Dados devolve os dados do gasto, como o usuário os informaria.
+func (g Gasto) Dados() Dados {
+	return Dados{
+		ValorCentavos: g.ValorCentavos, Data: g.Data, CategoriaID: g.CategoriaID, Grupo: g.Grupo,
+		CartaoID: g.CartaoID, Descricao: g.Descricao, Recorrente: g.Recorrente, MesReferencia: g.MesReferencia,
+	}
+}
+
+func (p Posicao) contract() *contract.SerieGasto {
+	if p.SerieID == "" {
+		return nil
+	}
+	return &contract.SerieGasto{ID: p.SerieID, Tipo: p.Tipo, Numero: p.Numero, Total: p.Total, Ajustado: p.Ajustado}
 }
 
 // DadosDe converte o payload do contrato.
