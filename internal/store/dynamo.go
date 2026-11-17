@@ -89,6 +89,9 @@ type item struct {
 	Numero        int    `dynamodbav:"numero,omitempty"`
 	TotalParcelas int    `dynamodbav:"totalParcelas,omitempty"`
 	Ajustado      bool   `dynamodbav:"ajustado,omitempty"`
+	// Autoria (colaboradores); ausentes = o dono da conta.
+	CriadoPor     string `dynamodbav:"criadoPor,omitempty"`
+	AtualizadoPor string `dynamodbav:"atualizadoPor,omitempty"`
 }
 
 // PK é a partition key do usuário.
@@ -130,6 +133,7 @@ func paraItem(g gasto.Gasto) (map[string]types.AttributeValue, error) {
 		CriadoEm: g.CriadoEm.UTC().Format(formatoData),
 		SerieID:  g.Serie.SerieID, SerieTipo: g.Serie.Tipo, Numero: g.Serie.Numero,
 		TotalParcelas: g.Serie.Total, Ajustado: g.Serie.Ajustado,
+		CriadoPor: g.CriadoPor, AtualizadoPor: g.AtualizadoPor,
 	}
 	if !g.AtualizadoEm.IsZero() {
 		it.AtualizadoEm = g.AtualizadoEm.UTC().Format(formatoData)
@@ -153,6 +157,7 @@ func decodificar(raw map[string]types.AttributeValue) (gasto.Gasto, error) {
 		Descricao: it.Descricao, Recorrente: it.Recorrente,
 		Serie: gasto.Posicao{SerieID: it.SerieID, Tipo: it.SerieTipo, Numero: it.Numero,
 			Total: it.TotalParcelas, Ajustado: it.Ajustado},
+		CriadoPor: it.CriadoPor, AtualizadoPor: it.AtualizadoPor,
 	}
 	var err error
 	if g.CriadoEm, err = time.Parse(formatoData, it.CriadoEm); err != nil {
@@ -308,6 +313,15 @@ func (d *Dynamo) Listar(ctx context.Context, userID string, f gasto.Filtro, inic
 	default:
 		filtros = append(filtros, "cartaoId = :cartao")
 		in.ExpressionAttributeValues[":cartao"] = s(f.CartaoID)
+	}
+	if f.AutorID != "" {
+		// Os gastos sem autor gravado são do dono.
+		if f.AutorEhDono() {
+			filtros = append(filtros, "(criadoPor = :autor OR attribute_not_exists(criadoPor))")
+		} else {
+			filtros = append(filtros, "criadoPor = :autor")
+		}
+		in.ExpressionAttributeValues[":autor"] = s(f.AutorID)
 	}
 	if len(filtros) > 0 {
 		in.FilterExpression = aws.String(strings.Join(filtros, " AND "))

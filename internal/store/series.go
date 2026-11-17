@@ -52,6 +52,7 @@ type itemSerie struct {
 	TotalParcelas   int      `dynamodbav:"totalParcelas,omitempty"`
 	MesesGerados    []string `dynamodbav:"mesesGerados,stringset,omitempty"`
 	PrimeiroGastoID string   `dynamodbav:"primeiroGastoId,omitempty"`
+	CriadoPor       string   `dynamodbav:"criadoPor,omitempty"`
 	Versao          int      `dynamodbav:"versao"`
 	CriadoEm        string   `dynamodbav:"criadoEm"`
 	AtualizadoEm    string   `dynamodbav:"atualizadoEm,omitempty"`
@@ -74,7 +75,7 @@ func paraItemSerie(se serie.Serie, versao int) (map[string]types.AttributeValue,
 		CartaoID: se.CartaoID, Descricao: se.Descricao, Dia: se.Dia,
 		MesInicial: se.MesInicial, MesFinal: se.MesFinal, PrimeiroNumero: se.PrimeiroNumero,
 		TotalParcelas: se.TotalParcelas, MesesGerados: se.MesesGerados, PrimeiroGastoID: se.PrimeiroGastoID,
-		Versao: versao, CriadoEm: se.CriadoEm.UTC().Format(formatoData),
+		CriadoPor: se.CriadoPor, Versao: versao, CriadoEm: se.CriadoEm.UTC().Format(formatoData),
 	}
 	if !se.AtualizadoEm.IsZero() {
 		it.AtualizadoEm = se.AtualizadoEm.UTC().Format(formatoData)
@@ -97,7 +98,7 @@ func decodificarSerie(raw map[string]types.AttributeValue) (serie.Serie, error) 
 		CartaoID: it.CartaoID, Descricao: it.Descricao, Dia: it.Dia,
 		MesInicial: it.MesInicial, MesFinal: it.MesFinal, PrimeiroNumero: it.PrimeiroNumero,
 		TotalParcelas: it.TotalParcelas, MesesGerados: it.MesesGerados, PrimeiroGastoID: it.PrimeiroGastoID,
-		Versao: it.Versao,
+		CriadoPor: it.CriadoPor, Versao: it.Versao,
 	}
 	var err error
 	if se.CriadoEm, err = time.Parse(formatoData, it.CriadoEm); err != nil {

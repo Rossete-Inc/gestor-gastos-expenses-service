@@ -77,6 +77,9 @@ type Gasto struct {
 	// Serie é a posição do gasto num parcelamento ou numa recorrência;
 	// SerieID vazio = gasto avulso.
 	Serie Posicao
+	// CriadoPor e AtualizadoPor (colaboradores): vazio = o dono da conta.
+	CriadoPor     string
+	AtualizadoPor string
 }
 
 // Posicao é a posição de um gasto numa série (spec
@@ -108,6 +111,8 @@ type Dados struct {
 	Recorrente    bool
 	// MesReferencia vazio = mês da data (gasto sem cartão).
 	MesReferencia string
+	// AutorID é quem lança ou edita; vazio = o dono da conta.
+	AutorID string
 }
 
 // Mes devolve o mês em que o gasto conta (o de referência), no formato
@@ -148,6 +153,7 @@ func Novo(ulid, userID string, d Dados, agora time.Time) (Gasto, error) {
 		Descricao:     d.Descricao,
 		Recorrente:    d.Recorrente,
 		CriadoEm:      agora.UTC().Truncate(time.Millisecond),
+		CriadoPor:     d.AutorID,
 	}, nil
 }
 
@@ -169,6 +175,7 @@ func (g Gasto) Atualizado(d Dados, agora time.Time) (Gasto, error) {
 	g.Descricao = d.Descricao
 	g.Recorrente = d.Recorrente
 	g.AtualizadoEm = agora.UTC().Truncate(time.Millisecond)
+	g.AtualizadoPor = d.AutorID
 	return g, nil
 }
 
@@ -182,6 +189,7 @@ func validar(d Dados) (Dados, error) {
 	d.MesReferencia = strings.TrimSpace(d.MesReferencia)
 	d.Grupo = Grupo(strings.TrimSpace(string(d.Grupo)))
 	d.Descricao = strings.TrimSpace(norm.NFC.String(d.Descricao))
+	d.AutorID = strings.TrimSpace(d.AutorID)
 
 	var campos []errs.FieldError
 	add := func(campo, msg string) { campos = append(campos, errs.FieldError{Field: campo, Message: msg}) }
@@ -298,6 +306,8 @@ func (g Gasto) Contract() contract.Gasto {
 		Descricao:     g.Descricao,
 		Recorrente:    g.Recorrente || g.Serie.Tipo == contract.SerieRecorrencia,
 		Serie:         g.Serie.contract(),
+		CriadoPor:     g.CriadoPor,
+		AtualizadoPor: g.AtualizadoPor,
 	}
 }
 
@@ -326,5 +336,6 @@ func DadosDe(in contract.GastoIn) Dados {
 		CartaoID:      in.CartaoID,
 		Descricao:     in.Descricao,
 		Recorrente:    in.Recorrente,
+		AutorID:       in.AutorID,
 	}
 }

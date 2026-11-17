@@ -337,3 +337,52 @@ func TestSeriesNoLimiteDoCartao(t *testing.T) {
 		t.Errorf("resumo = %+v", r)
 	}
 }
+
+// Change colaboradores: autoria dos lançamentos.
+
+func TestAutoriaEFiltroPorPessoa(t *testing.T) {
+	svc, _ := montar(t)
+	// Gasto antigo, sem autor gravado: conta como do dono.
+	antigo := criar(t, svc, "u-1", dados("2026-11-02", "mercado", gasto.Fixo, 100))
+	d := dados("2026-11-03", "mercado", gasto.Fixo, 200)
+	d.AutorID = "bruno"
+	doBruno := criar(t, svc, "u-1", d)
+	if doBruno.CriadoPor != "bruno" || doBruno.Contract().CriadoPor != "bruno" {
+		t.Fatalf("criado por = %+v", doBruno)
+	}
+	d = doBruno.Dados()
+	d.ValorCentavos, d.AutorID = 250, "u-1"
+	editado, err := svc.AtualizarGasto(ctx, "u-1", doBruno.ID, d)
+	if err != nil || editado.CriadoPor != "bruno" || editado.AtualizadoPor != "u-1" {
+		t.Fatalf("editado = %+v, %v", editado, err)
+	}
+
+	ids := func(autor string) []string {
+		pg, err := svc.ListarGastos(ctx, "u-1", Listagem{Mes: "2026-11", AutorID: autor})
+		if err != nil {
+			t.Fatal(err)
+		}
+		var l []string
+		for _, g := range pg.Items {
+			l = append(l, g.ID)
+		}
+		return l
+	}
+	if l := ids("bruno"); len(l) != 1 || l[0] != doBruno.ID {
+		t.Errorf("do bruno = %v", l)
+	}
+	if l := ids("u-1"); len(l) != 1 || l[0] != antigo.ID {
+		t.Errorf("do dono = %v", l)
+	}
+	if l := ids(""); len(l) != 2 {
+		t.Errorf("todos = %v", l)
+	}
+
+	// A recorrência lançada pelo colaborador cria ocorrências com o autor dele.
+	in := recorrente(gastoIn("2026-11-05", "luz", gasto.Fixo, 20_000, ""), "")
+	in.AutorID = "bruno"
+	lancar(t, svc, in)
+	if dez := umDoMes(t, svc, "2026-12"); dez.CriadoPor != "bruno" {
+		t.Errorf("ocorrência de dezembro criada por %q", dez.CriadoPor)
+	}
+}

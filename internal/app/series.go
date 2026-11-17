@@ -56,6 +56,7 @@ func (s *Service) Lancar(ctx context.Context, userID string, in contract.CriarGa
 	}
 	dados := modelo.Dados()
 	dados.MesReferencia = ""
+	dados.AutorID = d.AutorID
 	se, itens, err := serie.Planejar(*pedido, id, userID, dados, fatura, agora)
 	if err != nil {
 		return gasto.Gasto{}, err
@@ -273,6 +274,7 @@ func (s *Service) atualizarSerie(ctx context.Context, userID, id string, d gasto
 		}
 		mes := it.Data[:len(gasto.LayoutMes)]
 		nd := destino.Modelo(mes)
+		nd.AutorID = d.AutorID // quem edita a série
 		if !mudouValor {
 			nd.ValorCentavos = it.ValorCentavos
 		}
