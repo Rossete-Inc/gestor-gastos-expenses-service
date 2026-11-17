@@ -51,6 +51,10 @@ func NovoULID(t time.Time) string {
 	return codificarULID(b)
 }
 
+// ULIDDeBytes codifica 16 bytes quaisquer como ULID; serve aos IDs
+// derivados de uma chave (séries idempotentes).
+func ULIDDeBytes(b [16]byte) string { return codificarULID(b) }
+
 // ULIDValido informa se s é um ULID.
 func ULIDValido(s string) bool { return padraoSoULID.MatchString(s) }
 

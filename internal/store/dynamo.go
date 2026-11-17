@@ -83,6 +83,12 @@ type item struct {
 	Recorrente    bool   `dynamodbav:"recorrente"`
 	CriadoEm      string `dynamodbav:"criadoEm"`
 	AtualizadoEm  string `dynamodbav:"atualizadoEm,omitempty"`
+	// Posição na série (parcelamentos-recorrencias); ausentes no avulso.
+	SerieID       string `dynamodbav:"serieId,omitempty"`
+	SerieTipo     string `dynamodbav:"serieTipo,omitempty"`
+	Numero        int    `dynamodbav:"numero,omitempty"`
+	TotalParcelas int    `dynamodbav:"totalParcelas,omitempty"`
+	Ajustado      bool   `dynamodbav:"ajustado,omitempty"`
 }
 
 // PK é a partition key do usuário.
@@ -122,6 +128,8 @@ func paraItem(g gasto.Gasto) (map[string]types.AttributeValue, error) {
 		Grupo: string(g.Grupo), CategoriaID: g.CategoriaID, CartaoID: g.CartaoID,
 		Descricao: g.Descricao, Recorrente: g.Recorrente,
 		CriadoEm: g.CriadoEm.UTC().Format(formatoData),
+		SerieID:  g.Serie.SerieID, SerieTipo: g.Serie.Tipo, Numero: g.Serie.Numero,
+		TotalParcelas: g.Serie.Total, Ajustado: g.Serie.Ajustado,
 	}
 	if !g.AtualizadoEm.IsZero() {
 		it.AtualizadoEm = g.AtualizadoEm.UTC().Format(formatoData)
@@ -143,6 +151,8 @@ func decodificar(raw map[string]types.AttributeValue) (gasto.Gasto, error) {
 		ValorCentavos: it.ValorCentavos, Data: it.Data, MesReferencia: it.MesReferencia,
 		Grupo: gasto.Grupo(it.Grupo), CategoriaID: it.CategoriaID, CartaoID: it.CartaoID,
 		Descricao: it.Descricao, Recorrente: it.Recorrente,
+		Serie: gasto.Posicao{SerieID: it.SerieID, Tipo: it.SerieTipo, Numero: it.Numero,
+			Total: it.TotalParcelas, Ajustado: it.Ajustado},
 	}
 	var err error
 	if g.CriadoEm, err = time.Parse(formatoData, it.CriadoEm); err != nil {

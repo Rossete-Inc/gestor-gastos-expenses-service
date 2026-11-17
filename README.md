@@ -8,7 +8,8 @@ Serviço de gastos do Gestor de Gastos (Go, Lambda, DynamoDB). Guarda os gastos 
 | --- | --- |
 | `contract` | Contrato público com o BFF: nomes das operações, códigos de erro e formatos de entrada e saída. É o único pacote fora de `internal/` |
 | `internal/gasto` | Domínio: validação do lançamento, formato do ID, grupos e filtro da listagem |
-| `internal/app` | Casos de uso: criar, obter, atualizar, excluir, listar com cursor assinado, checar categoria em uso e consumir `UserDeleted` |
+| `internal/serie` | Domínio dos parcelamentos e recorrências: divisão das parcelas, datas e meses da série |
+| `internal/app` | Casos de uso: lançar (avulso, parcelado ou recorrente), obter, atualizar e excluir com alcance, listar com cursor assinado, criar as ocorrências recorrentes, checar categoria em uso e consumir `UserDeleted` |
 | `internal/store` | Store DynamoDB (chaves abaixo) |
 | `internal/handler` | Liga os casos de uso ao `invoke.Router` e ao `events.Router` da go-commons, usados pela Lambda e pelo `cmd/local` |
 | `cmd/local` | Servidor HTTP local que chama os mesmos handlers da Lambda (ver "Rodar localmente") |
@@ -23,10 +24,10 @@ Toda operação age sobre o `userId` do envelope, que o BFF tira do token. Envel
 
 | Operação | Payload | Resposta | Erros |
 | --- | --- | --- | --- |
-| `CriarGasto` | `GastoIn` | `Gasto` | 422 `validacao` com `errors[]` (`valorCentavos`, `data`, `categoriaId`, `grupo`, `cartaoId`, `descricao`) |
+| `CriarGasto` | `GastoIn` + `parcelamento?`, `recorrencia?`, `chaveIdempotencia?` | `Gasto` (no parcelado, a 1ª parcela criada) | 422 `validacao` com `errors[]` (`valorCentavos`, `data`, `categoriaId`, `grupo`, `cartaoId`, `descricao`, `modo`, `parcelas`, `parcelaAtual`, `mesFinal`, `recorrencia`) |
 | `ObterGasto` | `{"id"}` | `Gasto` | 404 `gasto_nao_encontrado` |
-| `AtualizarGasto` | `{"id"}` + campos do `GastoIn` | `Gasto` (com ID novo se o mês de referência ou a data mudaram) | 422 `validacao`; 404 `gasto_nao_encontrado` |
-| `ExcluirGasto` | `{"id"}` | sem payload | 404 `gasto_nao_encontrado` |
+| `AtualizarGasto` | `{"id","escopo?"}` + campos do `GastoIn` | `Gasto` (com ID novo se o mês de referência ou a data mudaram) | 422 `validacao` (inclusive `escopo` faltando num gasto de série e `data` com mês novo em `PROXIMAS`/`TODAS`); 404 `gasto_nao_encontrado` |
+| `ExcluirGasto` | `{"id","escopo?"}` | sem payload | 422 `validacao` (`escopo`); 404 `gasto_nao_encontrado` |
 | `ListarGastos` | `{"mes","grupo?","categoriaId?","cartaoId?","cursor?","limit?"}` (`mes` é o de referência; `cartaoId` aceita `SEM_CARTAO`) | `{"items":[Gasto],"nextCursor?"}`, do mais recente para o mais antigo | 422 `validacao` (`mes`, `grupo`, `categoriaId`, `cartaoId`); 400 `cursor_invalido` |
 | `ExisteGastoNaCategoria` | `{"categoriaId"}` | `{"existe":bool}` | 422 `validacao` |
 | `ResumoMensal` | `{"mes"}` | `ResumoMensalOut` (abaixo) | 422 `validacao` (`mes`) |
@@ -38,7 +39,9 @@ Toda operação age sobre o `userId` do envelope, que o BFF tira do token. Envel
 | `ResumoCartoes` | `{"mes","hoje"}` | `{"mes","items":[{"cartao","faturaCentavos","limiteUsadoCentavos","limiteDisponivelCentavos","vencimento"}]}` | 422 `validacao` (`mes`, `hoje`) |
 
 - `GastoIn` é `{"valorCentavos","data","categoriaId","grupo","cartaoId?","descricao?","recorrente"}`: o `GastoIn` do `openapi.yaml` do BFF mais o `grupo` da categoria. O cartão precisa ser do usuário e estar ativo; na edição, manter o cartão atual vale mesmo arquivado. A regra "categoria `CARTAO` exige cartão" fica no BFF.
-- `Gasto` é `{"id","valorCentavos","data","mesReferencia","grupo","categoriaId","cartaoId?","descricao?","recorrente"}`. `mesReferencia` é o mês da fatura do cartão (ver Regras) ou, sem cartão, o mês da data. O BFF troca o `categoriaId` pelo resumo da categoria (nome e cor) do schema `Gasto` do openapi.
+- `Gasto` é `{"id","valorCentavos","data","mesReferencia","grupo","categoriaId","cartaoId?","descricao?","recorrente","serie?"}`, com `serie` = `{"id","tipo","numero","total?","ajustado?"}` (`tipo` `PARCELAMENTO` ou `RECORRENCIA`; `total` só no parcelamento) e `recorrente` verdadeiro também nas ocorrências de recorrência.
+- `parcelamento` é `{"modo","parcelas?","parcelaAtual?","mesFinal?"}`: no modo `TOTAL`, `valorCentavos` é o total, dividido por `parcelas` (2 a 72) com o resto na 1ª; no modo `PARCELA`, `valorCentavos` é o valor de cada parcela, da `parcelaAtual` (padrão 1) até `parcelas` ou até o `mesFinal` (mês de referência da última parcela). `recorrencia` é `{"mesFinal?"}`, o mês da data da última ocorrência. `chaveIdempotencia` é o `Idempotency-Key` do front: o reenvio devolve o mesmo gasto sem criar nada.
+- `escopo` é `ESTA`, `PROXIMAS` ou `TODAS`, obrigatório num gasto de série e ignorado no avulso. `mesReferencia` é o mês da fatura do cartão (ver Regras) ou, sem cartão, o mês da data. O BFF troca o `categoriaId` pelo resumo da categoria (nome e cor) do schema `Gasto` do openapi.
 - `ResumoMensalOut` é `{"mes","totalCentavos","totaisPorGrupo":[{"grupo","totalCentavos"}],"totaisPorCategoria":[{"categoriaId","grupo","totalCentavos"}],"recentes":[Gasto]}`. `totaisPorGrupo` traz sempre `CARTAO` e `FIXO`, nessa ordem, mesmo zerados. `totaisPorCategoria` só tem categorias com gasto no mês, do maior total para o menor. `totaisPorCartao` (`[{"cartaoId","totalCentavos"}]`, `""` = sem cartão) e `totaisPorCategoriaECartao` (`[{"categoriaId","grupo","cartaoId","totalCentavos"}]`) dividem o mesmo total por cartão. `recentes` são até 5 gastos, na ordem da listagem. As duas somas por grupo e por categoria fecham exatamente com `totalCentavos`. Mês sem gastos devolve totais zerados e listas `[]`. O nome e a cor das categorias e os percentuais (método do maior resto) ficam com o BFF, em `/telas/dashboard`.
 - A existência e a visibilidade da categoria são checadas pelo BFF no categories-service antes de `CriarGasto` e `AtualizarGasto`. O BFF também chama `ExisteGastoNaCategoria` antes de excluir uma categoria (409 `categoria_em_uso`). Ver design.md, "Regras que atravessam serviços ficam no BFF".
 
@@ -50,11 +53,14 @@ Evento consumido: `UserDeleted` (`{"userId"}`), que apaga todos os gastos e cart
 - **Data:** `AAAA-MM-DD`, uma data que existe no calendário, a partir de 1900. `2026-02-30` e `2026-2-3` são recusadas.
 - **Descrição:** opcional, até 140 caracteres, gravada em NFC e sem espaços nas pontas. Quebras de linha e outros caracteres de controle são recusados.
 - **Grupo:** `CARTAO` ou `FIXO`, o grupo da categoria, gravado no gasto para filtrar e somar sem consultar o categories-service.
-- **Recorrente:** só informativo no MVP.
+- **Recorrente (flag):** informativo nos gastos lançados antes das séries; não gera ocorrências.
+- **Parcelamento:** a série e todas as parcelas são gravadas numa transação. A parcela k cai no mês da data somado de k-1 meses, no mesmo dia (ou no último dia do mês), e o mês de referência sai da fatura do cartão, então parcelas seguidas caem em faturas seguidas.
+- **Recorrência:** a série grava o modelo (valor, categoria, cartão, descrição, dia) e os meses já criados. Ao ler um mês (listagem, resumo do mês e resumo dos cartões), o serviço cria as ocorrências que faltam até ele, numa transação que marca os meses na série; leituras repetidas ou simultâneas não duplicam. Uma ocorrência excluída com `ESTA` não volta. No limite do cartão, só as ocorrências até o mês corrente contam; as parcelas futuras contam todas.
+- **Alcance:** `ESTA` altera só o gasto e o marca como ajustado; `PROXIMAS` e `TODAS` alteram também os seguintes (ou todos) que não foram ajustados, e só o dia da data vale para a série (mudar o mês é 422). Se o valor não muda, cada parcela mantém o seu. `PROXIMAS` numa recorrência a partir de um mês que não é o primeiro encerra a série no mês anterior e começa outra. Na exclusão, `PROXIMAS` apaga o gasto e os seguintes (encerrando a recorrência) e `TODAS` apaga a série inteira.
 - **Cartão (ADR 0009):** apelido (até 40 caracteres, único entre os ativos do usuário, sem diferenciar maiúsculas), cor `#RRGGBB`, dias de fechamento e vencimento (1 a 31) e limite em centavos. No máximo 20 ativos. Arquivado some dos formulários, mas os gastos dele continuam nos totais. Não se exclui cartão com gastos.
 - **Mês de referência (fatura):** compra até o dia de fechamento, inclusive, entra na fatura que fecha naquele mês; depois, na seguinte. A fatura vence no mês do fechamento se o dia de vencimento for maior que o de fechamento, senão no mês seguinte, e leva o nome do mês do vencimento. Dia que não existe no mês vira o último dia. Mudar os dias do cartão não recalcula os gastos já lançados. Ver `internal/cartao/fatura.go`.
 - **Limite usado:** soma dos gastos do cartão em faturas cujo vencimento ainda não passou (o dia do vencimento conta), inclusive as futuras. O disponível pode ficar negativo. Não há controle de pagamento.
-- **ID:** o mês de referência e a data compactos e um [ULID](https://github.com/ulid/spec), separados por hífen, por exemplo `202612-20261110-01JC8Z6Q3N4W5X6Y7Z8A9B0C1D`. O mês e a data no ID levam à chave do DynamoDB sem índice secundário. O ULID ordena os gastos do mesmo dia pela hora do lançamento e não muda na edição. **Se o mês de referência ou a data mudam, o ID muda**: o gasto troca de chave numa transação e o antigo deixa de existir. IDs no formato anterior (`20261103-<ULID>`) continuam aceitos até a migração.
+- **ID:** o mês de referência e a data compactos e um [ULID](https://github.com/ulid/spec), separados por hífen, por exemplo `202612-20261110-01JC8Z6Q3N4W5X6Y7Z8A9B0C1D`. O mês e a data no ID levam à chave do DynamoDB sem índice secundário. O ULID ordena os gastos do mesmo dia pela hora do lançamento e não muda na edição. **Se o mês de referência ou a data mudam, o ID muda**: o gasto troca de chave numa transação e o antigo deixa de existir.
 - **Listagem:** 20 itens por página por padrão, no máximo 100. O cursor é a chave do último gasto devolvido, em base64url e assinada com HMAC sobre o escopo da listagem (usuário, mês, grupo e categoria). Um cursor adulterado, de outra listagem ou de outro segredo responde 400 `cursor_invalido`.
 
 ## DynamoDB
@@ -65,14 +71,16 @@ Tabela `gestor-gastos-expenses`, com as chaves do contrato com o seed do infra-b
 | --- | --- | --- |
 | Gasto | `USER#<userId>` | `EXP#<AAAA-MM ref>#<AAAA-MM-DD>#<ULID>` |
 | Cartão | `USER#<userId>` | `CARD#<ULID>` |
+| Série | `USER#<userId>` | `SERIE#<ULID>` |
 
-Atributos do gasto: `gastoId`, `valorCentavos` (número inteiro), `data`, `mesReferencia`, `grupo`, `categoriaId`, `cartaoId` (só se houver), `descricao` (só se houver), `recorrente`, `criadoEm` e `atualizadoEm` (só depois da primeira edição). Atributos do cartão: `cartaoId`, `apelido`, `cor`, `diaFechamento`, `diaVencimento`, `limiteCentavos`, `arquivado`, `criadoEm` e `atualizadoEm`.
+Atributos do gasto: `gastoId`, `valorCentavos` (número inteiro), `data`, `mesReferencia`, `grupo`, `categoriaId`, `cartaoId` (só se houver), `descricao` (só se houver), `recorrente`, `criadoEm` e `atualizadoEm` (só depois da primeira edição). Atributos do cartão: `cartaoId`, `apelido`, `cor`, `diaFechamento`, `diaVencimento`, `limiteCentavos`, `arquivado`, `criadoEm` e `atualizadoEm`. O gasto de série tem também `serieId`, `serieTipo`, `numero`, `totalParcelas` e `ajustado`. Atributos da série: `serieId`, `tipo`, `valorCentavos`, `categoriaId`, `grupo`, `cartaoId`, `descricao`, `dia`, `mesInicial`, `mesFinal`, `primeiroNumero`, `totalParcelas`, `mesesGerados` (conjunto de strings), `primeiroGastoId`, `versao`, `criadoEm` e `atualizadoEm`. O ID da série lançada com chave de idempotência é derivado da chave.
 
 - **Isolamento:** tudo do usuário fica na partição dele. Ler, editar ou excluir o gasto de outro usuário não encontra nada.
 - **Listagem do mês:** uma Query com `begins_with(SK, "EXP#AAAA-MM#")` em ordem decrescente. Os filtros por grupo, categoria e cartão usam `FilterExpression` (`SEM_CARTAO` = `attribute_not_exists(cartaoId)`). Como o `Limit` do DynamoDB conta os itens antes do filtro, o store monta a página com Queries de até 100 itens até juntar o tamanho pedido. Se a página enche exatamente no fim de uma Query que ainda tinha continuação, o cursor é devolvido mesmo sem haver mais gastos, e a página seguinte pode vir vazia, sem cursor.
 - **Resumo do mês:** uma Query com `begins_with(SK, "EXP#AAAA-MM#")`, seguindo as continuações até o fim do mês, e as somas em memória. O volume pessoal (dezenas a centenas de gastos por mês) cabe nisso; o gatilho para materializar os totais via Streams está no ADR 0002.
 - **Categoria e cartão em uso:** uma Query nos gastos do usuário (`begins_with(SK, "EXP#")`) só com as chaves, filtrando por `categoriaId` ou `cartaoId` e parando no primeiro gasto encontrado.
 - **Resumo dos cartões:** uma Query dos cartões (`CARD#`) e uma dos gastos com `SK BETWEEN "EXP#<mês>" AND "EXP$"`, a partir do menor entre o mês pedido e o mês de hoje, inclusive as faturas futuras.
+- **Séries:** uma Query em `begins_with(SK, "SERIE#")` antes de cada leitura de mês; os gastos de uma série saem de uma Query nos gastos filtrando por `serieId`. Edições em série gravam em transações de até 100 itens, e a série só é regravada sobre a versão lida (`versao`); se outra operação a mudou no meio, o serviço tenta de novo uma vez.
 - Leituras consistentes em todas as operações, para um gasto recém-lançado aparecer na hora.
 
 ## Rodar localmente

@@ -11,6 +11,7 @@ import (
 
 	"github.com/Rossete-Inc/gestor-gastos-expenses-service/internal/cartao"
 	"github.com/Rossete-Inc/gestor-gastos-expenses-service/internal/gasto"
+	"github.com/Rossete-Inc/gestor-gastos-expenses-service/internal/serie"
 	"github.com/Rossete-Inc/gestor-gastos-go-commons/errs"
 	"github.com/Rossete-Inc/gestor-gastos-go-commons/events"
 	"github.com/Rossete-Inc/gestor-gastos-go-commons/page"
@@ -65,6 +66,24 @@ type Store interface {
 	// ExcluirCartao apaga o cartão, ou devolve
 	// errs.NotFound("cartao_nao_encontrado").
 	ExcluirCartao(ctx context.Context, userID, id string) error
+
+	// CriarSerie grava a série e os gastos de uma vez. Série com o mesmo ID
+	// já gravada: errs.Conflict("serie_existente"), sem gravar nada.
+	CriarSerie(ctx context.Context, s serie.Serie, gastos []gasto.Gasto) error
+	// ObterSerie devolve a série id do usuário, ou errs.NotFound.
+	ObterSerie(ctx context.Context, userID, id string) (serie.Serie, error)
+	// ListarSeries devolve todas as séries do usuário.
+	ListarSeries(ctx context.Context, userID string) ([]serie.Serie, error)
+	// GerarOcorrencias marca os meses como criados na série e grava as
+	// ocorrências (uma por mês, na mesma ordem). Se outra leitura já marcou
+	// algum dos meses, não grava nada e não é erro.
+	GerarOcorrencias(ctx context.Context, s serie.Serie, meses []string, gastos []gasto.Gasto) error
+	// DaSerie devolve os gastos da série.
+	DaSerie(ctx context.Context, userID, serieID string) ([]gasto.Gasto, error)
+	// Aplicar grava as mudanças de uma edição ou exclusão em série. Série
+	// gravada por outra operação depois de lida:
+	// errs.Conflict("serie_alterada").
+	Aplicar(ctx context.Context, m serie.Mudancas) error
 }
 
 // Service implementa os casos de uso.
@@ -195,6 +214,12 @@ func (s *Service) ListarGastos(ctx context.Context, userID string, in Listagem) 
 	if err != nil {
 		return page.Page[gasto.Gasto]{}, err
 	}
+	// As ocorrências recorrentes do mês nascem na primeira página.
+	if in.Cursor == "" {
+		if err := s.gerarRecorrencias(ctx, userID, f.Mes); err != nil {
+			return page.Page[gasto.Gasto]{}, err
+		}
+	}
 	itens, proximo, err := s.store.Listar(ctx, userID, f, inicio, page.Limit(in.Limit))
 	if err != nil {
 		return page.Page[gasto.Gasto]{}, err
@@ -216,6 +241,9 @@ func (s *Service) ResumoMensal(ctx context.Context, userID, mes string) (gasto.R
 	mes = strings.TrimSpace(mes)
 	if !gasto.MesValido(mes) {
 		return gasto.Resumo{}, errs.Validation("Mês inválido.", errs.FieldError{Field: "mes", Message: "deve ser um mês válido no formato AAAA-MM"})
+	}
+	if err := s.gerarRecorrencias(ctx, userID, mes); err != nil {
+		return gasto.Resumo{}, err
 	}
 	gastos, err := s.store.DoMes(ctx, userID, mes)
 	if err != nil {

@@ -21,7 +21,7 @@ func Invoke(svc *app.Service, log *slog.Logger) *invoke.Router {
 	r := invoke.NewRouter(log)
 
 	r.Handle(contract.OpCriarGasto, invoke.Typed(func(ctx context.Context, userID string, in contract.CriarGastoIn) (contract.Gasto, error) {
-		g, err := svc.CriarGasto(ctx, userID, gasto.DadosDe(in))
+		g, err := svc.Lancar(ctx, userID, in)
 		return g.Contract(), err
 	}))
 
@@ -31,12 +31,12 @@ func Invoke(svc *app.Service, log *slog.Logger) *invoke.Router {
 	}))
 
 	r.Handle(contract.OpAtualizarGasto, invoke.Typed(func(ctx context.Context, userID string, in contract.AtualizarGastoIn) (contract.Gasto, error) {
-		g, err := svc.AtualizarGasto(ctx, userID, in.ID, gasto.DadosDe(in.GastoIn))
+		g, err := svc.AtualizarGastoNoEscopo(ctx, userID, in.ID, gasto.DadosDe(in.GastoIn), in.Escopo)
 		return g.Contract(), err
 	}))
 
 	r.Handle(contract.OpExcluirGasto, invoke.Typed(func(ctx context.Context, userID string, in contract.ExcluirGastoIn) (any, error) {
-		return nil, svc.ExcluirGasto(ctx, userID, in.ID)
+		return nil, svc.ExcluirGastoNoEscopo(ctx, userID, in.ID, in.Escopo)
 	}))
 
 	r.Handle(contract.OpListarGastos, invoke.Typed(func(ctx context.Context, userID string, in contract.ListarGastosIn) (contract.PaginaGastos, error) {

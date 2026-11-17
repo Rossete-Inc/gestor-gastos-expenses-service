@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Rossete-Inc/gestor-gastos-expenses-service/contract"
 	"github.com/Rossete-Inc/gestor-gastos-expenses-service/internal/cartao"
 	"github.com/Rossete-Inc/gestor-gastos-expenses-service/internal/gasto"
 	"github.com/Rossete-Inc/gestor-gastos-go-commons/errs"
@@ -247,9 +248,15 @@ func (s *Service) ResumoCartoes(ctx context.Context, userID, mes, hoje string) (
 	if len(cartoes) == 0 {
 		return resumos, nil
 	}
+	// A fatura do mês pedido inclui as ocorrências recorrentes dele; no
+	// limite, só as até o mês corrente contam (spec, "Séries no limite").
+	mesHoje := hoje[:len(gasto.LayoutMes)]
+	if err := s.gerarRecorrencias(ctx, userID, max(mes, mesHoje)); err != nil {
+		return nil, err
+	}
 	// Faturas de meses anteriores ao de hoje já venceram; a do mês pedido
 	// pode ser antiga.
-	gastos, err := s.store.DesdeMes(ctx, userID, min(mes, hoje[:len(gasto.LayoutMes)]))
+	gastos, err := s.store.DesdeMes(ctx, userID, min(mes, mesHoje))
 	if err != nil {
 		return nil, err
 	}
@@ -267,7 +274,8 @@ func (s *Service) ResumoCartoes(ctx context.Context, userID, mes, hoje string) (
 		if g.Mes() == mes {
 			r.FaturaCentavos += g.ValorCentavos
 		}
-		if !r.Cartao.Vencimento(g.Mes()).Before(dia) {
+		recorrenciaFutura := g.Serie.Tipo == contract.SerieRecorrencia && g.Data[:len(gasto.LayoutMes)] > mesHoje
+		if !r.Cartao.Vencimento(g.Mes()).Before(dia) && !recorrenciaFutura {
 			r.LimiteUsadoCentavos += g.ValorCentavos
 		}
 	}
