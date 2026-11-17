@@ -42,7 +42,7 @@ func Invoke(svc *app.Service, log *slog.Logger) *invoke.Router {
 	r.Handle(contract.OpListarGastos, invoke.Typed(func(ctx context.Context, userID string, in contract.ListarGastosIn) (contract.PaginaGastos, error) {
 		pg, err := svc.ListarGastos(ctx, userID, app.Listagem{
 			Mes: in.Mes, Grupo: in.Grupo, CategoriaID: in.CategoriaID, CartaoID: in.CartaoID,
-			Cursor: in.Cursor, Limit: in.Limit,
+			AutorID: in.AutorID, Cursor: in.Cursor, Limit: in.Limit,
 		})
 		if err != nil {
 			return contract.PaginaGastos{}, err

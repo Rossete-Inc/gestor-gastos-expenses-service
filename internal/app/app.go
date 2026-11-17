@@ -193,8 +193,10 @@ type Listagem struct {
 	Grupo       string
 	CategoriaID string
 	CartaoID    string
-	Cursor      string
-	Limit       int
+	// AutorID filtra por quem lançou (colaboradores).
+	AutorID string
+	Cursor  string
+	Limit   int
 }
 
 // ListarGastos devolve uma página de gastos do mês, do mais recente para o
@@ -209,6 +211,7 @@ func (s *Service) ListarGastos(ctx context.Context, userID string, in Listagem) 
 	if err != nil {
 		return page.Page[gasto.Gasto]{}, err
 	}
+	f = f.ComAutor(in.AutorID, userID)
 	escopo := f.Escopo(userID)
 	inicio, err := s.cursores.Decode(escopo, in.Cursor)
 	if err != nil {

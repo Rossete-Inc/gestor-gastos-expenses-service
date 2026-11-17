@@ -161,6 +161,12 @@ type Gasto struct {
 	// Serie identifica o parcelamento ou a recorrência do gasto; ausente no
 	// gasto avulso.
 	Serie *SerieGasto `json:"serie,omitempty"`
+	// CriadoPor é quem lançou (colaboradores); vazio = o dono da conta, como
+	// nos gastos anteriores à autoria.
+	CriadoPor string `json:"criadoPor,omitempty"`
+	// AtualizadoPor é quem editou por último; vazio = nunca editado ou
+	// editado antes da autoria.
+	AtualizadoPor string `json:"atualizadoPor,omitempty"`
 }
 
 // SerieGasto é a posição de um gasto na série.
@@ -191,6 +197,9 @@ type GastoIn struct {
 	// inexistente, alheio ou arquivado: 422 "validacao" (cartaoId). Na
 	// edição, manter o cartão atual vale mesmo se ele estiver arquivado.
 	CartaoID string `json:"cartaoId,omitempty"`
+	// AutorID é quem age (o sub do token), que o BFF manda quando um
+	// colaborador lança ou edita na conta do dono. Vazio = o próprio dono.
+	AutorID string `json:"autorId,omitempty"`
 }
 
 // CriarGastoIn é o payload de CriarGasto: os dados do gasto e, no máximo,
@@ -259,6 +268,9 @@ type ListarGastosIn struct {
 	// CartaoID filtra pelo cartão; SemCartao = só os sem cartão. Vazio =
 	// todos.
 	CartaoID string `json:"cartaoId,omitempty"`
+	// AutorID filtra por quem lançou; o próprio dono inclui os gastos sem
+	// autor gravado. Vazio = todos.
+	AutorID string `json:"autorId,omitempty"`
 	// Cursor é o NextCursor da página anterior. Vazio = primeira página.
 	Cursor string `json:"cursor,omitempty"`
 	// Limit de itens por página: padrão 20, máximo 100.

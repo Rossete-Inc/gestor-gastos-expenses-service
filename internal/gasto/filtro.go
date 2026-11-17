@@ -21,7 +21,20 @@ type Filtro struct {
 	CategoriaID string // vazio = todas
 	// CartaoID vazio = todos; SemCartao = só os gastos sem cartão.
 	CartaoID string
+	// AutorID vazio = todos. Dono é o dono da conta: filtrar por ele inclui
+	// os gastos sem autor gravado (anteriores à autoria).
+	AutorID string
+	Dono    string
 }
+
+// ComAutor devolve o filtro por quem lançou, na conta do dono.
+func (f Filtro) ComAutor(autorID, dono string) Filtro {
+	f.AutorID, f.Dono = strings.TrimSpace(autorID), dono
+	return f
+}
+
+// AutorEhDono informa se o filtro de autor pede os gastos do dono.
+func (f Filtro) AutorEhDono() bool { return f.AutorID != "" && f.AutorID == f.Dono }
 
 // NovoFiltro valida os parâmetros da listagem.
 func NovoFiltro(mes, grupo, categoriaID, cartaoID string) (Filtro, error) {
@@ -57,7 +70,8 @@ func (f Filtro) Aceita(g Gasto) bool {
 	return g.Mes() == f.Mes &&
 		(f.Grupo == "" || g.Grupo == f.Grupo) &&
 		(f.CategoriaID == "" || g.CategoriaID == f.CategoriaID) &&
-		f.aceitaCartao(g.CartaoID)
+		f.aceitaCartao(g.CartaoID) &&
+		(f.AutorID == "" || g.CriadoPor == f.AutorID || (f.AutorEhDono() && g.CriadoPor == ""))
 }
 
 func (f Filtro) aceitaCartao(cartaoID string) bool {
@@ -74,5 +88,5 @@ func (f Filtro) aceitaCartao(cartaoID string) bool {
 // Escopo identifica a listagem para assinar o cursor: um cursor só vale para
 // o mesmo usuário, mês e filtros.
 func (f Filtro) Escopo(userID string) string {
-	return "USER#" + userID + "|mes=" + f.Mes + "|grupo=" + string(f.Grupo) + "|categoria=" + f.CategoriaID + "|cartao=" + f.CartaoID
+	return "USER#" + userID + "|mes=" + f.Mes + "|grupo=" + string(f.Grupo) + "|categoria=" + f.CategoriaID + "|cartao=" + f.CartaoID + "|autor=" + f.AutorID
 }

@@ -52,6 +52,9 @@ type Serie struct {
 	MesesGerados []string
 	// PrimeiroGastoID é o gasto devolvido no lançamento (e no reenvio).
 	PrimeiroGastoID string
+	// CriadoPor é quem lançou a série (colaboradores); as ocorrências
+	// recorrentes levam o mesmo autor. Vazio = o dono da conta.
+	CriadoPor string
 	// Versao muda a cada gravação; o store só grava por cima da versão lida,
 	// para uma edição não perder os meses criados por uma leitura ao mesmo
 	// tempo.
@@ -157,6 +160,7 @@ func Planejar(p Pedido, id, userID string, d gasto.Dados, fatura MesDaFatura, ag
 		ID: id, UserID: userID, Tipo: p.Tipo, ValorCentavos: d.ValorCentavos,
 		CategoriaID: d.CategoriaID, Grupo: d.Grupo, CartaoID: d.CartaoID, Descricao: d.Descricao,
 		Dia: dia, MesInicial: mesData, PrimeiroNumero: 1, CriadoEm: agora.UTC().Truncate(time.Millisecond),
+		CriadoPor: d.AutorID,
 	}
 	invalido := func(campo, msg string) error {
 		return errs.Validation("Dados do gasto inválidos.", errs.FieldError{Field: campo, Message: msg})
@@ -249,7 +253,7 @@ func (s Serie) NumeroDoMes(mes string) int { return s.PrimeiroNumero + MesesEntr
 func (s Serie) Modelo(mes string) gasto.Dados {
 	return gasto.Dados{
 		ValorCentavos: s.ValorCentavos, Data: DataNoMes(mes, s.Dia), CategoriaID: s.CategoriaID,
-		Grupo: s.Grupo, CartaoID: s.CartaoID, Descricao: s.Descricao,
+		Grupo: s.Grupo, CartaoID: s.CartaoID, Descricao: s.Descricao, AutorID: s.CriadoPor,
 	}
 }
 

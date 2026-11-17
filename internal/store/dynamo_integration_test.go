@@ -363,3 +363,35 @@ func TestDoMes(t *testing.T) {
 		t.Errorf("mês vazio = %v, %v", vazio, err)
 	}
 }
+
+func TestFiltroPorAutor(t *testing.T) {
+	d, _, _ := tabelaDeTeste(t)
+	antigo := lancar(t, d, "u-1", "2026-11-02", "mercado", gasto.Fixo, 1)
+	relogio = relogio.Add(time.Millisecond)
+	g, err := gasto.Novo(gasto.NovoULID(relogio), "u-1", gasto.Dados{
+		ValorCentavos: 2, Data: "2026-11-03", CategoriaID: "mercado", Grupo: gasto.Fixo, AutorID: "bruno",
+	}, relogio)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := d.Criar(ctx, g); err != nil {
+		t.Fatal(err)
+	}
+	if lido, _ := d.Obter(ctx, "u-1", g.ID); lido.CriadoPor != "bruno" {
+		t.Errorf("criadoPor = %q", lido.CriadoPor)
+	}
+	listar := func(autor string) []gasto.Gasto {
+		f, _ := gasto.NovoFiltro("2026-11", "", "", "")
+		l, _, err := d.Listar(ctx, "u-1", f.ComAutor(autor, "u-1"), nil, 20)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return l
+	}
+	if l := listar("bruno"); len(l) != 1 || l[0].ID != g.ID {
+		t.Errorf("do bruno = %+v", l)
+	}
+	if l := listar("u-1"); len(l) != 1 || l[0].ID != antigo.ID {
+		t.Errorf("do dono (sem autor gravado) = %+v", l)
+	}
+}
