@@ -18,10 +18,6 @@ import (
 // gastos do mesmo dia pela hora do lançamento e não muda na edição; o mês de
 // referência e a data mudam, e com eles o ID.
 //
-// Antes da change cartoes-credito o ID não tinha o mês (formato legado,
-// AAAAMMDD-ULID, SK=EXP#AAAA-MM-DD#<ULID>). Os dois formatos são lidos até a
-// migração terminar (scripts/migrar-mes-referencia).
-//
 // Um ULID tem 128 bits: 48 de milissegundos desde a época Unix e 80
 // aleatórios, em 26 caracteres do base32 de Crockford (sem I, L, O e U).
 
@@ -30,9 +26,8 @@ const alfabeto = "0123456789ABCDEFGHJKMNPQRSTVWXYZ"
 const padraoULID = `([0-7][0-9A-HJKMNP-TV-Z]{25})`
 
 var (
-	padraoID       = regexp.MustCompile(`^([0-9]{6})-([0-9]{8})-` + padraoULID + `$`)
-	padraoIDLegado = regexp.MustCompile(`^([0-9]{8})-` + padraoULID + `$`)
-	padraoSoULID   = regexp.MustCompile(`^` + padraoULID + `$`)
+	padraoID     = regexp.MustCompile(`^([0-9]{6})-([0-9]{8})-` + padraoULID + `$`)
+	padraoSoULID = regexp.MustCompile(`^` + padraoULID + `$`)
 )
 
 // TamanhoID é o tamanho de todo ID de gasto no formato atual.
@@ -40,13 +35,11 @@ const TamanhoID = 6 + 1 + 8 + 1 + 26
 
 // Partes são os componentes de um ID de gasto.
 type Partes struct {
-	// MesReferencia no formato AAAA-MM. No formato legado, o mês da data.
+	// MesReferencia no formato AAAA-MM.
 	MesReferencia string
 	// Data no formato AAAA-MM-DD.
 	Data string
 	ULID string
-	// Legado indica um ID sem o mês de referência (antes da migração).
-	Legado bool
 }
 
 // NovoULID gera um ULID com o instante t.
@@ -78,32 +71,19 @@ func IDDe(mesReferencia, data, ulid string) string {
 	return strings.ReplaceAll(mesReferencia, "-", "") + "-" + strings.ReplaceAll(data, "-", "") + "-" + ulid
 }
 
-// IDLegado monta o ID no formato anterior à change cartoes-credito. Só é
-// usado pela migração e pelos testes da leitura dupla.
-func IDLegado(data, ulid string) string {
-	return strings.ReplaceAll(data, "-", "") + "-" + ulid
-}
-
-// PartesDoID decompõe um ID nos dois formatos. ok é false para qualquer ID
+// PartesDoID decompõe um ID. ok é false para qualquer ID
 // fora do formato ou com mês ou data inexistentes; esses IDs nunca existem e
 // nem chegam ao banco.
 func PartesDoID(id string) (p Partes, ok bool) {
-	if m := padraoID.FindStringSubmatch(id); m != nil {
-		p = Partes{MesReferencia: m[1][:4] + "-" + m[1][4:], Data: dataDe(m[2]), ULID: m[3]}
-		if !MesValido(p.MesReferencia) || !DataValida(p.Data) {
-			return Partes{}, false
-		}
-		return p, true
+	m := padraoID.FindStringSubmatch(id)
+	if m == nil {
+		return Partes{}, false
 	}
-	if m := padraoIDLegado.FindStringSubmatch(id); m != nil {
-		p = Partes{Data: dataDe(m[1]), ULID: m[2], Legado: true}
-		if !DataValida(p.Data) {
-			return Partes{}, false
-		}
-		p.MesReferencia = p.Data[:len(LayoutMes)]
-		return p, true
+	p = Partes{MesReferencia: m[1][:4] + "-" + m[1][4:], Data: dataDe(m[2]), ULID: m[3]}
+	if !MesValido(p.MesReferencia) || !DataValida(p.Data) {
+		return Partes{}, false
 	}
-	return Partes{}, false
+	return p, true
 }
 
 func dataDe(compacta string) string {

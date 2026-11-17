@@ -5,17 +5,10 @@
 //	gasto   PK=USER#<userId>   SK=EXP#<AAAA-MM ref>#<AAAA-MM-DD>#<ULID>
 //	cartão  PK=USER#<userId>   SK=CARD#<ULID>
 //
-// Antes da change cartoes-credito a SK do gasto era EXP#<AAAA-MM-DD>#<ULID>
-// (formato legado, sem o mês de referência). Até a migração
-// (scripts/migrar-mes-referencia) os dois formatos são lidos: o prefixo
-// "EXP#AAAA-MM" pega "EXP#AAAA-MM#..." (atual) e "EXP#AAAA-MM-..."
-// (legado, cujo mês de referência é o da data). Nessa transição a ordem da
-// listagem agrupa os legados antes dos atuais.
-//
 // Tudo de um usuário fica na partição dele, então a partition key isola os
 // usuários: um gasto ou cartão alheio simplesmente não é encontrado. A SK em
 // ordem decrescente dá a listagem do mês do mais recente para o mais antigo,
-// e o begins_with(SK, "EXP#AAAA-MM") seleciona o mês de referência. Os filtros por grupo e
+// e o begins_with(SK, "EXP#AAAA-MM#") seleciona o mês de referência. Os filtros por grupo e
 // categoria usam FilterExpression; o volume pessoal (dezenas a centenas de
 // gastos por mês) cabe nisso sem índice secundário (design.md).
 package store
@@ -95,22 +88,17 @@ type item struct {
 // PK é a partition key do usuário.
 func PK(userID string) string { return "USER#" + userID }
 
-// SK é a sort key do gasto id, nos dois formatos. ok é false se o ID estiver
-// fora do formato.
+// SK é a sort key do gasto id. ok é false se o ID estiver fora do formato.
 func SK(id string) (sk string, ok bool) {
 	p, ok := gasto.PartesDoID(id)
 	if !ok {
 		return "", false
 	}
-	if p.Legado {
-		return prefixoGasto + p.Data + "#" + p.ULID, true
-	}
 	return prefixoGasto + p.MesReferencia + "#" + p.Data + "#" + p.ULID, true
 }
 
-// prefixoMes seleciona os gastos do mês de referência (AAAA-MM) nos dois
-// formatos de SK: "EXP#AAAA-MM#..." e o legado "EXP#AAAA-MM-...".
-func prefixoMes(mes string) string { return prefixoGasto + mes }
+// prefixoMes seleciona os gastos do mês de referência (AAAA-MM).
+func prefixoMes(mes string) string { return prefixoGasto + mes + "#" }
 
 func chave(userID, id string) (map[string]types.AttributeValue, error) {
 	sk, ok := SK(id)
@@ -155,10 +143,6 @@ func decodificar(raw map[string]types.AttributeValue) (gasto.Gasto, error) {
 		ValorCentavos: it.ValorCentavos, Data: it.Data, MesReferencia: it.MesReferencia,
 		Grupo: gasto.Grupo(it.Grupo), CategoriaID: it.CategoriaID, CartaoID: it.CartaoID,
 		Descricao: it.Descricao, Recorrente: it.Recorrente,
-	}
-	if g.MesReferencia == "" && len(g.Data) >= len(gasto.LayoutMes) {
-		// Item legado: o mês de referência é o da data.
-		g.MesReferencia = g.Data[:len(gasto.LayoutMes)]
 	}
 	var err error
 	if g.CriadoEm, err = time.Parse(formatoData, it.CriadoEm); err != nil {

@@ -133,7 +133,7 @@ func Novo(ulid, userID string, d Dados, agora time.Time) (Gasto, error) {
 
 // Atualizado devolve o gasto com os dados novos, já validados, mantendo o
 // ULID, o dono e a data de criação. Se o mês de referência ou a data mudarem,
-// ou se o ID ainda estiver no formato legado, o ID muda junto.
+// o ID muda junto.
 func (g Gasto) Atualizado(d Dados, agora time.Time) (Gasto, error) {
 	d, err := validar(d)
 	if err != nil {

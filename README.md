@@ -63,25 +63,16 @@ Tabela `gestor-gastos-expenses`, com as chaves do contrato com o seed do infra-b
 
 | Item | PK | SK |
 | --- | --- | --- |
-| Gasto | `USER#<userId>` | `EXP#<AAAA-MM ref>#<AAAA-MM-DD>#<ULID>` (legado: `EXP#<AAAA-MM-DD>#<ULID>`) |
+| Gasto | `USER#<userId>` | `EXP#<AAAA-MM ref>#<AAAA-MM-DD>#<ULID>` |
 | Cartão | `USER#<userId>` | `CARD#<ULID>` |
 
 Atributos do gasto: `gastoId`, `valorCentavos` (número inteiro), `data`, `mesReferencia`, `grupo`, `categoriaId`, `cartaoId` (só se houver), `descricao` (só se houver), `recorrente`, `criadoEm` e `atualizadoEm` (só depois da primeira edição). Atributos do cartão: `cartaoId`, `apelido`, `cor`, `diaFechamento`, `diaVencimento`, `limiteCentavos`, `arquivado`, `criadoEm` e `atualizadoEm`.
 
 - **Isolamento:** tudo do usuário fica na partição dele. Ler, editar ou excluir o gasto de outro usuário não encontra nada.
-- **Listagem do mês:** uma Query com `begins_with(SK, "EXP#AAAA-MM")` em ordem decrescente; o prefixo pega os dois formatos de SK enquanto a migração não roda (nesse intervalo, os legados vêm antes dos atuais). Os filtros por grupo, categoria e cartão usam `FilterExpression` (`SEM_CARTAO` = `attribute_not_exists(cartaoId)`). Como o `Limit` do DynamoDB conta os itens antes do filtro, o store monta a página com Queries de até 100 itens até juntar o tamanho pedido. Se a página enche exatamente no fim de uma Query que ainda tinha continuação, o cursor é devolvido mesmo sem haver mais gastos, e a página seguinte pode vir vazia, sem cursor.
-- **Resumo do mês:** uma Query com `begins_with(SK, "EXP#AAAA-MM")`, seguindo as continuações até o fim do mês, e as somas em memória. O volume pessoal (dezenas a centenas de gastos por mês) cabe nisso; o gatilho para materializar os totais via Streams está no ADR 0002.
+- **Listagem do mês:** uma Query com `begins_with(SK, "EXP#AAAA-MM#")` em ordem decrescente. Os filtros por grupo, categoria e cartão usam `FilterExpression` (`SEM_CARTAO` = `attribute_not_exists(cartaoId)`). Como o `Limit` do DynamoDB conta os itens antes do filtro, o store monta a página com Queries de até 100 itens até juntar o tamanho pedido. Se a página enche exatamente no fim de uma Query que ainda tinha continuação, o cursor é devolvido mesmo sem haver mais gastos, e a página seguinte pode vir vazia, sem cursor.
+- **Resumo do mês:** uma Query com `begins_with(SK, "EXP#AAAA-MM#")`, seguindo as continuações até o fim do mês, e as somas em memória. O volume pessoal (dezenas a centenas de gastos por mês) cabe nisso; o gatilho para materializar os totais via Streams está no ADR 0002.
 - **Categoria e cartão em uso:** uma Query nos gastos do usuário (`begins_with(SK, "EXP#")`) só com as chaves, filtrando por `categoriaId` ou `cartaoId` e parando no primeiro gasto encontrado.
 - **Resumo dos cartões:** uma Query dos cartões (`CARD#`) e uma dos gastos com `SK BETWEEN "EXP#<mês>" AND "EXP$"`, a partir do menor entre o mês pedido e o mês de hoje, inclusive as faturas futuras.
-
-### Migração do mês de referência
-
-Os gastos gravados antes da change `cartoes-credito` usam a SK sem o mês. O comando `scripts/migrar-mes-referencia` regrava cada um no formato atual, com `mesReferencia` igual ao mês da data, numa transação por gasto. É idempotente: rodar de novo não encontra nada a migrar.
-
-```bash
-AWS_PROFILE=rossete.inc go run ./scripts/migrar-mes-referencia -tabela gestor-gastos-dev-expenses -simular
-AWS_PROFILE=rossete.inc go run ./scripts/migrar-mes-referencia -tabela gestor-gastos-dev-expenses
-```
 - Leituras consistentes em todas as operações, para um gasto recém-lançado aparecer na hora.
 
 ## Rodar localmente
