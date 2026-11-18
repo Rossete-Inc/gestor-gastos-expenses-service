@@ -1,5 +1,5 @@
-github.com/Rossete-Inc/gestor-gastos-go-commons v0.1.1 h1:LV8IIkQ057DTMXIODw77NXRHuwdxOds+Vp2Ih62n1n4=
-github.com/Rossete-Inc/gestor-gastos-go-commons v0.1.1/go.mod h1:x9KPx4MElC0yaUpzF//YmwaFPEjJAE9uxlMDYnffqqA=
+github.com/Rossete-Inc/gestor-gastos-go-commons v0.2.0 h1:wLDUJ6wJkQMMvscZSRoWMSodsTfhSoA46zMRc/AgsXM=
+github.com/Rossete-Inc/gestor-gastos-go-commons v0.2.0/go.mod h1:x9KPx4MElC0yaUpzF//YmwaFPEjJAE9uxlMDYnffqqA=
 github.com/aws/aws-lambda-go v1.55.1 h1:We2cCp4BwqqH/JW+bEEo1FhgG71rslvjfi4y7KmlrR0=
 github.com/aws/aws-lambda-go v1.55.1/go.mod h1:V+NzkHNR6vBC8C1PDloqSLE+7jYWFiPvJJFiCiTm8nE=
 github.com/aws/aws-sdk-go-v2 v1.48.0 h1:tFU7EJVm7MfyaXLsXdYTZ0Vd6vwt9OljCyqq0gqk0Mc=
@@ -24,8 +24,8 @@ github.com/aws/aws-sdk-go-v2/service/dynamodb v1.74.0 h1:DSfi8o1qAb2AQwFwfk4gjOE
 github.com/aws/aws-sdk-go-v2/service/dynamodb v1.74.0/go.mod h1:tzOEVcpLdi8aqyYUKQkuOVVAOfOgfLA0xEomIUTHIFY=
 github.com/aws/aws-sdk-go-v2/service/dynamodbstreams v1.47.0 h1:oOwgaAgzDhepqUDT+lO2QINr38eQdZDSwSB/1vYjAtw=
 github.com/aws/aws-sdk-go-v2/service/dynamodbstreams v1.47.0/go.mod h1:4OHltsL4eJAx/C2Kkg8IR0rr6+SNrPPbsLHsl3RqlpU=
-github.com/aws/aws-sdk-go-v2/service/eventbridge v1.55.10 h1:DVdV+1lzwS1nVJAz9zJ+F7vVJJySl8ZD7HpM5d/ZPKI=
-github.com/aws/aws-sdk-go-v2/service/eventbridge v1.55.10/go.mod h1:JbJLZd7ABFzaZdW8IxRpUvi4ja8hyB19wAw8jIVM29s=
+github.com/aws/aws-sdk-go-v2/service/eventbridge v1.55.11 h1:ojgfcj4mTmmv4oS6tCdLOSE7JREY9ac79Agwqbo6Qhw=
+github.com/aws/aws-sdk-go-v2/service/eventbridge v1.55.11/go.mod h1:dH07c6fNA09NdicyUUIH85aHE3tzUrZnjRwhmERs+S4=
 github.com/aws/aws-sdk-go-v2/service/internal/accept-encoding v1.13.25 h1:rKwkY3Z+fvt2W0msjdNs6uNewPmXzPayQ961oyuWhes=
 github.com/aws/aws-sdk-go-v2/service/internal/accept-encoding v1.13.25/go.mod h1:dBuAadQKd1F4Q4ZOg8gnFmuSHMRE40Pe3IfFwbtC4lE=
 github.com/aws/aws-sdk-go-v2/service/internal/endpoint-discovery v1.13.12 h1:nQk6qDTBniyqk01UgtxwxTbOf6aWWKmUaB/rPtDOJis=

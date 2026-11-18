@@ -57,7 +57,7 @@ func NovaStackExpenses(scope constructs.Construct, id string, props *ExpensesPro
 	nome := NomeStack(env, NomeServico)
 
 	tabela := novaTabela(stack, nome)
-	_, alias := novaFuncao(stack, env, nome, props.Codigo, tabela)
+	_, alias := novaFuncao(stack, env, nome, props.Codigo, tabela, params[ParamBusName])
 
 	dlq := awssqs.Queue_FromQueueArn(stack, jsii.String("Dlq"), jsii.String(params[ParamDlqArn]))
 
@@ -73,6 +73,8 @@ func NovaStackExpenses(scope constructs.Construct, id string, props *ExpensesPro
 	novoCanary(stack, nome, alias)
 
 	barramento := awsevents.EventBus_FromEventBusName(stack, jsii.String("Barramento"), jsii.String(params[ParamBusName]))
+	// Publica o MetasAtingidas, consumido pelo users-service (ADR 0011).
+	barramento.GrantPutEventsTo(alias, nil)
 	awsevents.NewRule(stack, jsii.String("UserDeleted"), &awsevents.RuleProps{
 		RuleName:    jsii.String(nome + "-user-deleted"),
 		Description: jsii.String("UserDeleted do users-service: apaga todos os gastos do usuário"),
@@ -128,7 +130,7 @@ func novaTabela(stack awscdk.Stack, nome string) awsdynamodb.Table {
 // console): a função recebe o caminho do SecureString e o lê, descriptografado,
 // ao iniciar. A permissão é só ssm:GetParameter nesse parâmetro; a chave é a
 // gerenciada aws/ssm, cuja política já permite o uso via SSM na conta.
-func novaFuncao(stack awscdk.Stack, env, nome string, codigo awslambda.Code, tabela awsdynamodb.Table) (awslambda.Function, awslambda.Alias) {
+func novaFuncao(stack awscdk.Stack, env, nome string, codigo awslambda.Code, tabela awsdynamodb.Table, barramento string) (awslambda.Function, awslambda.Alias) {
 	logs := awslogs.NewLogGroup(stack, jsii.String("Logs"), &awslogs.LogGroupProps{
 		LogGroupName:  jsii.String("/aws/lambda/" + nome),
 		Retention:     awslogs.RetentionDays_ONE_WEEK,
@@ -138,7 +140,7 @@ func novaFuncao(stack awscdk.Stack, env, nome string, codigo awslambda.Code, tab
 	segredo := CaminhoSSM(env, ParamCursorSecret)
 	fn := awslambda.NewFunction(stack, jsii.String("Funcao"), &awslambda.FunctionProps{
 		FunctionName: jsii.String(nome),
-		Description:  jsii.String("expenses-service: invoke do BFF e consumidor de UserDeleted"),
+		Description:  jsii.String("expenses-service: invoke do BFF, consumidor de UserDeleted e publicador de MetasAtingidas"),
 		Runtime:      awslambda.Runtime_PROVIDED_AL2023(),
 		Architecture: awslambda.Architecture_ARM_64(),
 		Handler:      jsii.String("bootstrap"),
@@ -151,6 +153,7 @@ func novaFuncao(stack awscdk.Stack, env, nome string, codigo awslambda.Code, tab
 			"ENV":                 jsii.String(env),
 			"EXPENSES_TABLE":      tabela.TableName(),
 			"CURSOR_SECRET_PARAM": jsii.String(segredo),
+			"EVENT_BUS_NAME":      jsii.String(barramento),
 			"LOG_LEVEL":           jsii.String("info"),
 		},
 	})

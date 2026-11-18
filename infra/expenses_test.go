@@ -105,6 +105,7 @@ func TestLambdaArm64De256MB(t *testing.T) {
 				"ENV":                 "dev",
 				"EXPENSES_TABLE":      ref(tabela),
 				"CURSOR_SECRET_PARAM": "/gestor-gastos/dev/expenses/cursor-secret",
+				"EVENT_BUS_NAME":      busTeste,
 				"LOG_LEVEL":           "info",
 			},
 		},
@@ -229,15 +230,17 @@ func TestPermissoesDaFuncao(t *testing.T) {
 		},
 	})
 
-	// O serviço não fala com o Cognito nem publica eventos.
+	// O serviço não fala com o Cognito; publica eventos só no barramento,
+	// para o MetasAtingidas (ADR 0011).
 	politicas, err := json.Marshal(tpl.FindResources(jsii.String("AWS::IAM::Policy"), nil))
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, acao := range []string{"cognito-idp:", "events:PutEvents"} {
-		if strings.Contains(string(politicas), acao) {
-			t.Errorf("a função não deveria ter %s", acao)
-		}
+	if strings.Contains(string(politicas), "cognito-idp:") {
+		t.Error("a função não deveria falar com o Cognito")
+	}
+	if strings.Count(string(politicas), "events:PutEvents") != 1 || !strings.Contains(string(politicas), ":event-bus/"+busTeste) {
+		t.Errorf("events:PutEvents deveria valer só no barramento %s: %s", busTeste, politicas)
 	}
 }
 

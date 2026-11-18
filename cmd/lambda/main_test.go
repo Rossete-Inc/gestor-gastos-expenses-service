@@ -9,6 +9,7 @@ import (
 	"github.com/Rossete-Inc/gestor-gastos-expenses-service/internal/handler"
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
+	"github.com/aws/aws-sdk-go-v2/service/eventbridge"
 	"github.com/aws/aws-sdk-go-v2/service/ssm"
 	"github.com/aws/aws-sdk-go-v2/service/ssm/types"
 )
@@ -20,6 +21,7 @@ func env(m map[string]string) func(string) (string, bool) {
 var envValido = map[string]string{
 	"RUNTIME": "aws", "ENV": "dev",
 	"EXPENSES_TABLE": "gestor-gastos-dev-expenses", "CURSOR_SECRET_PARAM": "/gestor-gastos/dev/expenses/cursor-secret",
+	"EVENT_BUS_NAME": "gestor-gastos-dev-bus",
 }
 
 // ssmFalso devolve o valor configurado e guarda o pedido.
@@ -39,7 +41,7 @@ func (s *ssmFalso) GetParameter(_ context.Context, in *ssm.GetParameterInput, _ 
 
 func com(s *ssmFalso) func(context.Context, string) (clientes, error) {
 	return func(context.Context, string) (clientes, error) {
-		return clientes{ssm: s, dynamo: dynamodb.New(dynamodb.Options{Region: "us-east-1"})}, nil
+		return clientes{ssm: s, dynamo: dynamodb.New(dynamodb.Options{Region: "us-east-1"}), eventos: eventbridge.New(eventbridge.Options{Region: "us-east-1"})}, nil
 	}
 }
 
@@ -55,11 +57,12 @@ func TestLoadConfig(t *testing.T) {
 
 func TestLoadConfigRecusa(t *testing.T) {
 	casos := map[string]map[string]string{
-		"sem RUNTIME":   {"ENV": "dev", "EXPENSES_TABLE": "t", "CURSOR_SECRET_PARAM": "p"},
-		"RUNTIME=local": {"RUNTIME": "local", "EXPENSES_TABLE": "t", "CURSOR_SECRET_PARAM": "p"},
-		"sem tabela":    {"RUNTIME": "aws", "ENV": "dev", "CURSOR_SECRET_PARAM": "p"},
-		"sem segredo":   {"RUNTIME": "aws", "ENV": "dev", "EXPENSES_TABLE": "t"},
-		"sem ENV":       {"RUNTIME": "aws", "EXPENSES_TABLE": "t", "CURSOR_SECRET_PARAM": "p"},
+		"sem RUNTIME":    {"ENV": "dev", "EXPENSES_TABLE": "t", "CURSOR_SECRET_PARAM": "p", "EVENT_BUS_NAME": "b"},
+		"RUNTIME=local":  {"RUNTIME": "local", "EXPENSES_TABLE": "t", "CURSOR_SECRET_PARAM": "p", "EVENT_BUS_NAME": "b"},
+		"sem tabela":     {"RUNTIME": "aws", "ENV": "dev", "CURSOR_SECRET_PARAM": "p", "EVENT_BUS_NAME": "b"},
+		"sem segredo":    {"RUNTIME": "aws", "ENV": "dev", "EXPENSES_TABLE": "t", "EVENT_BUS_NAME": "b"},
+		"sem barramento": {"RUNTIME": "aws", "ENV": "dev", "EXPENSES_TABLE": "t", "CURSOR_SECRET_PARAM": "p"},
+		"sem ENV":        {"RUNTIME": "aws", "EXPENSES_TABLE": "t", "CURSOR_SECRET_PARAM": "p"},
 	}
 	for nome, m := range casos {
 		t.Run(nome, func(t *testing.T) {

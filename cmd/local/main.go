@@ -53,6 +53,9 @@ type Config struct {
 	DynamoEndpoint string
 	Table          string
 	CursorSecret   string
+	// LocalTargets recebe o MetasAtingidas (LOCAL_EVENT_TARGETS); vazio =
+	// nenhum consumidor.
+	LocalTargets string
 }
 
 // LoadConfig lê o ambiente. Só aceita RUNTIME=local e um DynamoDB local, para
@@ -72,6 +75,7 @@ func LoadConfig(lookup config.LookupFunc) (Config, error) {
 		DynamoEndpoint: r.Get("DYNAMODB_ENDPOINT", "http://localhost:8000"),
 		Table:          r.Get("EXPENSES_TABLE", store.TableName),
 		CursorSecret:   r.Get("CURSOR_SECRET", SegredoCursorLocal),
+		LocalTargets:   r.Get("LOCAL_EVENT_TARGETS", ""),
 	}
 	if err := exigirLocal(c.DynamoEndpoint); err != nil {
 		return Config{}, err
@@ -131,7 +135,13 @@ func run(ctx context.Context, lookup config.LookupFunc) error {
 		BaseEndpoint: aws.String(cfg.DynamoEndpoint),
 		Credentials:  credentials.NewStaticCredentialsProvider("local", "local", ""),
 	})
-	svc := app.New(store.NewDynamo(db, cfg.Table), cursores, log)
+	pub, err := events.NewPublisher(events.Options{
+		Runtime: cfg.Base.Runtime, Source: "gestor-gastos.expenses", LocalTargets: cfg.LocalTargets, Log: log,
+	})
+	if err != nil {
+		return err
+	}
+	svc := app.New(store.NewDynamo(db, cfg.Table), cursores, log).ComEventos(pub)
 
 	srv := &http.Server{
 		Addr:              net.JoinHostPort("127.0.0.1", cfg.Port),
