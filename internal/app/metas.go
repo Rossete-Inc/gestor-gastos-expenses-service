@@ -11,6 +11,7 @@ import (
 	"github.com/Rossete-Inc/gestor-gastos-expenses-service/internal/gasto"
 	"github.com/Rossete-Inc/gestor-gastos-expenses-service/internal/meta"
 	"github.com/Rossete-Inc/gestor-gastos-go-commons/errs"
+	"github.com/Rossete-Inc/gestor-gastos-go-commons/events"
 )
 
 // maxNomeCategoria é o tamanho máximo do nome de categoria (o mesmo do
@@ -178,6 +179,12 @@ func (s *Service) alertasDaEscrita(ctx context.Context, donoID, autorID string, 
 		return cmp.Or(strings.Compare(a.mes, b.mes), strings.Compare(a.categoriaID, b.categoriaID))
 	})
 
+	alertas := s.avaliarPares(ctx, donoID, pares, delta)
+	s.publicarAlertas(ctx, donoID, autorID, alertas)
+	return alertas
+}
+
+func (s *Service) avaliarPares(ctx context.Context, donoID string, pares []parMeta, delta map[parMeta]int64) []meta.Alerta {
 	var alertas []meta.Alerta
 	metas := map[string]*meta.Meta{} // nil = categoria sem meta
 	gastosDoMes := map[string][]gasto.Gasto{}
@@ -192,6 +199,29 @@ func (s *Service) alertasDaEscrita(ctx context.Context, donoID, autorID string, 
 		}
 	}
 	return alertas
+}
+
+// publicarAlertas publica um MetasAtingidas com os alertas da escrita, para
+// o users-service notificar a conta (ADR 0011). Os limiares já foram
+// marcados: se a publicação falhar, o push se perde, mas o aviso continua na
+// resposta e o estado no painel (design.md, riscos).
+func (s *Service) publicarAlertas(ctx context.Context, donoID, autorID string, alertas []meta.Alerta) {
+	if len(alertas) == 0 || s.eventos == nil {
+		return
+	}
+	if strings.TrimSpace(autorID) == "" {
+		autorID = donoID
+	}
+	d := events.MetasAtingidasDetail{DonoID: donoID, AutorID: autorID, Alertas: make([]events.AlertaDeMeta, 0, len(alertas))}
+	for _, a := range alertas {
+		d.Alertas = append(d.Alertas, events.AlertaDeMeta{
+			CategoriaID: a.CategoriaID, NomeCategoria: a.NomeCategoria, Mes: a.Mes,
+			Limiar: a.Limiar, TotalCentavos: a.TotalCentavos, MetaCentavos: a.MetaCentavos,
+		})
+	}
+	if err := s.eventos.Publish(ctx, events.MetasAtingidas, d); err != nil {
+		s.log.ErrorContext(ctx, "falha ao publicar MetasAtingidas; o push destes alertas se perde", "userId", donoID, "alertas", len(alertas), "erro", err)
+	}
 }
 
 func (s *Service) avaliarMeta(ctx context.Context, donoID string, p parMeta, delta int64, metas map[string]*meta.Meta, gastosDoMes map[string][]gasto.Gasto) (*meta.Alerta, error) {

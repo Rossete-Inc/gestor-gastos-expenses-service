@@ -1,11 +1,15 @@
 package app
 
 import (
+	"context"
+	"errors"
+	"fmt"
 	"testing"
 
 	"github.com/Rossete-Inc/gestor-gastos-expenses-service/contract"
 	"github.com/Rossete-Inc/gestor-gastos-expenses-service/internal/gasto"
 	"github.com/Rossete-Inc/gestor-gastos-expenses-service/internal/meta"
+	"github.com/Rossete-Inc/gestor-gastos-go-commons/events"
 )
 
 // Spec metas-gastos, "Aviso ao salvar um gasto" e "Progresso da meta no mês".
@@ -182,4 +186,67 @@ func umDoMesDaCategoria(t *testing.T, svc *Service, mes, categoria string, valor
 	}
 	t.Fatalf("sem gasto de %d em %s/%s", valor, categoria, mes)
 	return gasto.Gasto{}
+}
+
+// publicadorFalso guarda os eventos; com falha, recusa todos.
+type publicadorFalso struct {
+	eventos []events.MetasAtingidasDetail
+	falha   error
+}
+
+func (p *publicadorFalso) Publish(_ context.Context, detailType string, detail any) error {
+	if p.falha != nil {
+		return p.falha
+	}
+	if detailType != events.MetasAtingidas {
+		return fmt.Errorf("detail-type %q", detailType)
+	}
+	p.eventos = append(p.eventos, detail.(events.MetasAtingidasDetail))
+	return nil
+}
+
+func TestPublicaUmEventoPorEscrita(t *testing.T) {
+	svc := comMetaDeLazer(t, 50000)
+	pub := &publicadorFalso{}
+	svc.ComEventos(pub)
+
+	// sem alerta, sem evento
+	lancarComAlertas(t, svc, avulso("2026-11-02", "lazer", 1000))
+	if len(pub.eventos) != 0 {
+		t.Fatalf("eventos sem alerta = %+v", pub.eventos)
+	}
+
+	// spec, "Um lançamento cruza limiares em vários meses": um evento, todos os alertas
+	in := parcelado(gastoIn("2026-11-10", "lazer", gasto.Cartao, 150000, ""), contract.ParcelamentoIn{Modo: contract.ModoTotal, Parcelas: 3})
+	in.AutorID = "bruno" // colaborador lançando na conta da u-1
+	if n := len(lancarComAlertas(t, svc, in)); n != 3 {
+		t.Fatalf("alertas = %d", n)
+	}
+	if len(pub.eventos) != 1 {
+		t.Fatalf("eventos = %+v", pub.eventos)
+	}
+	e := pub.eventos[0]
+	if e.DonoID != "u-1" || e.AutorID != "bruno" || len(e.Alertas) != 3 {
+		t.Fatalf("evento = %+v", e)
+	}
+	if a := e.Alertas[0]; a.CategoriaID != "lazer" || a.NomeCategoria != "Lazer" || a.Mes != "2026-11" || a.Limiar != 100 || a.MetaCentavos != 50000 {
+		t.Fatalf("alerta = %+v", a)
+	}
+}
+
+func TestFalhaAoPublicarNaoDesfazOGasto(t *testing.T) {
+	svc := comMetaDeLazer(t, 50000)
+	svc.ComEventos(&publicadorFalso{falha: errors.New("barramento fora")})
+	g, alertas, err := svc.LancarComAlertas(ctx, "u-1", avulso("2026-11-02", "lazer", 60000))
+	if err != nil || g.ID == "" || len(alertas) != 1 {
+		t.Fatalf("lançamento = %+v, %+v, %v", g, alertas, err)
+	}
+	// o dono é o autor quando ninguém mais é informado
+	pub := &publicadorFalso{}
+	svc2 := comMetaDeLazer(t, 50000)
+	svc2.ComEventos(pub)
+	lancarComAlertas(t, svc2, avulso("2026-11-02", "lazer", 60000))
+	if len(pub.eventos) != 1 || pub.eventos[0].AutorID != "u-1" {
+		t.Fatalf("eventos = %+v", pub.eventos)
+	}
 }

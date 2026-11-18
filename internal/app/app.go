@@ -105,6 +105,14 @@ type Service struct {
 	cursores *page.Codec
 	log      *slog.Logger
 	agora    func() time.Time
+	// eventos publica MetasAtingidas; nil = alertas só na resposta.
+	eventos events.Publisher
+}
+
+// ComEventos liga a publicação de MetasAtingidas (ADR 0011).
+func (s *Service) ComEventos(p events.Publisher) *Service {
+	s.eventos = p
+	return s
 }
 
 // New cria o Service. cursores assina os cursores da listagem; log nil usa

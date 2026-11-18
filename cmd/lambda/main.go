@@ -8,6 +8,7 @@
 //	ENV=dev                     ambiente
 //	EXPENSES_TABLE=...          tabela DynamoDB dos gastos
 //	CURSOR_SECRET_PARAM=...     caminho do SecureString com o segredo dos cursores
+//	EVENT_BUS_NAME=...          barramento onde sai o MetasAtingidas (ADR 0011)
 //	LOG_LEVEL=info              opcional
 //
 // Build (o mesmo do go-service.yml):
@@ -27,22 +28,29 @@ import (
 	"github.com/Rossete-Inc/gestor-gastos-expenses-service/internal/handler"
 	"github.com/Rossete-Inc/gestor-gastos-expenses-service/internal/store"
 	"github.com/Rossete-Inc/gestor-gastos-go-commons/config"
+	"github.com/Rossete-Inc/gestor-gastos-go-commons/events"
 	"github.com/Rossete-Inc/gestor-gastos-go-commons/logging"
 	"github.com/Rossete-Inc/gestor-gastos-go-commons/page"
 	"github.com/aws/aws-lambda-go/lambda"
 	"github.com/aws/aws-sdk-go-v2/aws"
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
+	"github.com/aws/aws-sdk-go-v2/service/eventbridge"
 	"github.com/aws/aws-sdk-go-v2/service/ssm"
 )
 
-const servico = "expenses-service"
+const (
+	servico = "expenses-service"
+	// fonteDosEventos é o source dos eventos publicados (MetasAtingidas).
+	fonteDosEventos = "gestor-gastos.expenses"
+)
 
 // Config é a configuração da Lambda.
 type Config struct {
 	Base              config.Base
 	Table             string
 	CursorSecretParam string
+	BusName           string
 }
 
 // LoadConfig lê o ambiente. Só aceita RUNTIME=aws e informa de uma vez todas
@@ -56,7 +64,10 @@ func LoadConfig(lookup config.LookupFunc) (Config, error) {
 		return Config{}, errors.New("cmd/lambda exige RUNTIME=aws; localmente use o cmd/local")
 	}
 	r := config.NewReader(lookup)
-	c := Config{Base: base, Table: r.Require("EXPENSES_TABLE"), CursorSecretParam: r.Require("CURSOR_SECRET_PARAM")}
+	c := Config{
+		Base: base, Table: r.Require("EXPENSES_TABLE"), CursorSecretParam: r.Require("CURSOR_SECRET_PARAM"),
+		BusName: r.Require("EVENT_BUS_NAME"),
+	}
 	if err := r.Err(); err != nil {
 		return Config{}, err
 	}
@@ -87,8 +98,9 @@ func lerSegredo(ctx context.Context, api SSMAPI, nome string) (*page.Codec, erro
 
 // clientes são as dependências da AWS, trocadas nos testes.
 type clientes struct {
-	ssm    SSMAPI
-	dynamo store.API
+	ssm     SSMAPI
+	dynamo  store.API
+	eventos events.EventBridgeAPI
 }
 
 func clientesAWS(ctx context.Context, region string) (clientes, error) {
@@ -96,7 +108,7 @@ func clientesAWS(ctx context.Context, region string) (clientes, error) {
 	if err != nil {
 		return clientes{}, fmt.Errorf("carregar configuração da AWS: %w", err)
 	}
-	return clientes{ssm: ssm.NewFromConfig(cfg), dynamo: dynamodb.NewFromConfig(cfg)}, nil
+	return clientes{ssm: ssm.NewFromConfig(cfg), dynamo: dynamodb.NewFromConfig(cfg), eventos: eventbridge.NewFromConfig(cfg)}, nil
 }
 
 // novoHandler monta o handler da função.
@@ -114,7 +126,13 @@ func novoHandler(ctx context.Context, lookup config.LookupFunc, novosClientes fu
 		return nil, err
 	}
 	log := logging.New(logging.Options{Service: servico, Env: cfg.Base.Env, Level: cfg.Base.LogLevel})
-	svc := app.New(store.NewDynamo(c.dynamo, cfg.Table), cursores, log)
+	pub, err := events.NewPublisher(events.Options{
+		Runtime: cfg.Base.Runtime, Source: fonteDosEventos, BusName: cfg.BusName, API: c.eventos,
+	})
+	if err != nil {
+		return nil, err
+	}
+	svc := app.New(store.NewDynamo(c.dynamo, cfg.Table), cursores, log).ComEventos(pub)
 	return handler.Lambda(svc, log), nil
 }
 
