@@ -22,7 +22,7 @@ import "github.com/Rossete-Inc/gestor-gastos-go-commons/page"
 
 // Operações atendidas pelo invoke.Router do serviço.
 const (
-	// OpCriarGasto lança um gasto com CriarGastoIn e devolve o Gasto criado.
+	// OpCriarGasto lança um gasto com CriarGastoIn e devolve o GastoComAlertas criado.
 	// Dados inválidos: 422 "validacao" com os campos (valorCentavos, data,
 	// categoriaId, grupo, descricao, parcelas, parcelaAtual, mesFinal).
 	// Parcelado: cria a série e todas as parcelas e devolve a 1ª criada.
@@ -35,7 +35,7 @@ const (
 	OpObterGasto = "ObterGasto"
 	// OpAtualizarGasto substitui valor, data, categoria, grupo, descrição e
 	// recorrência do gasto AtualizarGastoIn.ID, com as validações de
-	// CriarGasto, e devolve o Gasto atualizado. O ID carrega a data do gasto:
+	// CriarGasto, e devolve o GastoComAlertas atualizado. O ID carrega a data do gasto:
 	// se a data muda, o gasto devolvido tem um ID novo e o antigo deixa de
 	// existir. Inexistente ou de outro usuário: 404 "gasto_nao_encontrado".
 	// Gasto de série exige Escopo (422 "validacao", campo escopo); com
@@ -82,6 +82,38 @@ const (
 	// OpResumoCartoes devolve ResumoCartoesOut: para cada cartão, a fatura
 	// do mês pedido e o limite usado e disponível na data Hoje.
 	OpResumoCartoes = "ResumoCartoes"
+
+	// Metas mensais por categoria (spec metas-gastos, ADR 0011). O BFF
+	// valida a categoria no categories-service e manda o nome e o grupo dela,
+	// e manda o mês corrente no fuso de Brasília.
+
+	// OpListarMetas devolve ListarMetasOut com as metas que valem no mês
+	// ListarMetasIn.Mes, com o total gasto em cada categoria. Mês inválido:
+	// 422 "validacao" (mes).
+	OpListarMetas = "ListarMetas"
+	// OpDefinirMeta define ou altera a meta da categoria do mês
+	// DefinirMetaIn.Mes em diante e devolve a MetaDoMes desse mês. Valor fora
+	// de R$ 0,01 a R$ 1.000.000,00, mês, categoria ou grupo inválidos: 422
+	// "validacao" (valorCentavos, mes, categoriaId, nomeCategoria, grupo).
+	OpDefinirMeta = "DefinirMeta"
+	// OpRemoverMeta tira a meta da categoria do mês RemoverMetaIn.Mes em
+	// diante; os meses anteriores mantêm a meta que valia neles. Sem meta
+	// valendo nesse mês: 404 "meta_nao_encontrada". Sem payload na resposta.
+	OpRemoverMeta = "RemoverMeta"
+	// OpExcluirMeta apaga a meta da categoria inteira, com o histórico. O BFF
+	// chama ao excluir a categoria. Sem meta, não é erro. Sem payload na
+	// resposta.
+	OpExcluirMeta = "ExcluirMeta"
+)
+
+// Estados de uma meta no mês (MetaDoMes.Estado).
+const (
+	// MetaDentro: abaixo de 80% do valor.
+	MetaDentro = "DENTRO"
+	// MetaAviso: de 80% até menos de 100%.
+	MetaAviso = "AVISO"
+	// MetaEstourada: 100% ou mais.
+	MetaEstourada = "ESTOURADA"
 )
 
 // SemCartao é o valor do filtro ListarGastosIn.CartaoID que seleciona os
@@ -132,6 +164,8 @@ const (
 	CodigoCartaoNaoEncontrado = "cartao_nao_encontrado"
 	CodigoCartaoEmUso         = "cartao_em_uso"
 	CodigoLimiteCartoes       = "limite_cartoes"
+
+	CodigoMetaNaoEncontrada = "meta_nao_encontrada"
 )
 
 // Limites de valor, em centavos: de R$ 0,01 a R$ 1.000.000,00 (openapi:
@@ -141,7 +175,7 @@ const (
 	MaxValorCentavos int64 = 100_000_000
 )
 
-// Gasto é a resposta de CriarGasto, ObterGasto e AtualizarGasto e o item de
+// Gasto é a resposta de ObterGasto, a base de GastoComAlertas e o item de
 // PaginaGastos. O BFF troca categoriaId pelo resumo da categoria (nome e cor)
 // do schema Gasto do openapi.
 type Gasto struct {
@@ -167,6 +201,26 @@ type Gasto struct {
 	// AtualizadoPor é quem editou por último; vazio = nunca editado ou
 	// editado antes da autoria.
 	AtualizadoPor string `json:"atualizadoPor,omitempty"`
+}
+
+// GastoComAlertas é a resposta de CriarGasto e AtualizarGasto: o Gasto, no
+// mesmo nível do JSON, mais as metas que esta escrita fez cruzar 80% ou 100%
+// pela primeira vez no mês, uma por meta e mês, com o maior limiar cruzado.
+// Quem lê como Gasto ignora o campo novo.
+type GastoComAlertas struct {
+	Gasto
+	AlertasDeMeta []AlertaDeMeta `json:"alertasDeMeta,omitempty"`
+}
+
+// AlertaDeMeta é um limiar (80 ou 100) que uma escrita fez uma meta cruzar
+// num mês, com os valores em centavos.
+type AlertaDeMeta struct {
+	CategoriaID   string `json:"categoriaId"`
+	NomeCategoria string `json:"nomeCategoria"`
+	Mes           string `json:"mes"`
+	Limiar        int    `json:"limiar"`
+	TotalCentavos int64  `json:"totalCentavos"`
+	MetaCentavos  int64  `json:"metaCentavos"`
 }
 
 // SerieGasto é a posição de um gasto na série.
@@ -321,6 +375,55 @@ type ResumoMensalOut struct {
 	// Recentes são até 5 gastos, do mais recente para o mais antigo, como
 	// em ListarGastos.
 	Recentes []Gasto `json:"recentes"`
+	// Metas são as metas que valem no mês, com o total de cada categoria,
+	// na ordem do ID da categoria. A ordem por estado fica com o BFF.
+	Metas []MetaDoMes `json:"metas"`
+}
+
+// MetaDoMes é uma meta num mês: o valor que vale nele e o total gasto na
+// categoria, somando todos os gastos da conta no mês de referência.
+type MetaDoMes struct {
+	CategoriaID   string `json:"categoriaId"`
+	NomeCategoria string `json:"nomeCategoria"`
+	Grupo         string `json:"grupo"`
+	Mes           string `json:"mes"`
+	ValorCentavos int64  `json:"valorCentavos"`
+	TotalCentavos int64  `json:"totalCentavos"`
+	// Estado é MetaDentro, MetaAviso ou MetaEstourada.
+	Estado string `json:"estado"`
+}
+
+// ListarMetasIn é o payload de ListarMetas.
+type ListarMetasIn struct {
+	// Mes no formato AAAA-MM. Obrigatório.
+	Mes string `json:"mes"`
+}
+
+// ListarMetasOut é a resposta de ListarMetas, com items sempre presente.
+type ListarMetasOut struct {
+	Items []MetaDoMes `json:"items"`
+}
+
+// DefinirMetaIn é o payload de DefinirMeta.
+type DefinirMetaIn struct {
+	CategoriaID   string `json:"categoriaId"`
+	NomeCategoria string `json:"nomeCategoria"`
+	Grupo         string `json:"grupo"`
+	ValorCentavos int64  `json:"valorCentavos"`
+	// Mes (AAAA-MM) é o mês corrente, de onde a meta passa a valer.
+	Mes string `json:"mes"`
+}
+
+// RemoverMetaIn é o payload de RemoverMeta.
+type RemoverMetaIn struct {
+	CategoriaID string `json:"categoriaId"`
+	// Mes (AAAA-MM) é o mês corrente, de onde a meta deixa de valer.
+	Mes string `json:"mes"`
+}
+
+// ExcluirMetaIn é o payload de ExcluirMeta.
+type ExcluirMetaIn struct {
+	CategoriaID string `json:"categoriaId"`
 }
 
 // TotalGrupo é a soma dos gastos de um grupo no mês.

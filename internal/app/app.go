@@ -11,6 +11,7 @@ import (
 
 	"github.com/Rossete-Inc/gestor-gastos-expenses-service/internal/cartao"
 	"github.com/Rossete-Inc/gestor-gastos-expenses-service/internal/gasto"
+	"github.com/Rossete-Inc/gestor-gastos-expenses-service/internal/meta"
 	"github.com/Rossete-Inc/gestor-gastos-expenses-service/internal/serie"
 	"github.com/Rossete-Inc/gestor-gastos-go-commons/errs"
 	"github.com/Rossete-Inc/gestor-gastos-go-commons/events"
@@ -84,6 +85,18 @@ type Store interface {
 	// gravada por outra operação depois de lida:
 	// errs.Conflict("serie_alterada").
 	Aplicar(ctx context.Context, m serie.Mudancas) error
+
+	// ObterMeta devolve a meta da categoria e se ela existe.
+	ObterMeta(ctx context.Context, donoID, categoriaID string) (meta.Meta, bool, error)
+	// ListarMetas devolve todas as metas da conta, inclusive as removidas.
+	ListarMetas(ctx context.Context, donoID string) ([]meta.Meta, error)
+	// SalvarMeta grava nome, grupo e vigências, sem mexer nos alertas.
+	SalvarMeta(ctx context.Context, m meta.Meta) error
+	// ExcluirMeta apaga a meta inteira; sem meta, não é erro.
+	ExcluirMeta(ctx context.Context, donoID, categoriaID string) error
+	// MarcarAlerta registra o limiar como notificado no mês e devolve true
+	// só se esta chamada o marcou.
+	MarcarAlerta(ctx context.Context, donoID, categoriaID, mes string, limiar int) (bool, error)
 }
 
 // Service implementa os casos de uso.
@@ -238,24 +251,35 @@ func (s *Service) ListarGastos(ctx context.Context, userID string, in Listagem) 
 // e por categoria e os 5 mais recentes. Lê o mês inteiro numa Query e soma
 // em memória (design.md).
 func (s *Service) ResumoMensal(ctx context.Context, userID, mes string) (gasto.Resumo, error) {
+	res, _, err := s.ResumoMensalComMetas(ctx, userID, mes)
+	return res, err
+}
+
+// ResumoMensalComMetas é o ResumoMensal mais as metas que valem no mês, com
+// o total de cada categoria (spec painel-gastos, "Metas do mês no painel").
+func (s *Service) ResumoMensalComMetas(ctx context.Context, userID, mes string) (gasto.Resumo, []meta.DoMes, error) {
 	if err := gasto.ExigirUsuario(userID); err != nil {
-		return gasto.Resumo{}, err
+		return gasto.Resumo{}, nil, err
 	}
 	mes = strings.TrimSpace(mes)
 	if !gasto.MesValido(mes) {
-		return gasto.Resumo{}, errs.Validation("Mês inválido.", errs.FieldError{Field: "mes", Message: "deve ser um mês válido no formato AAAA-MM"})
+		return gasto.Resumo{}, nil, errs.Validation("Mês inválido.", errs.FieldError{Field: "mes", Message: "deve ser um mês válido no formato AAAA-MM"})
 	}
 	if err := s.gerarRecorrencias(ctx, userID, mes); err != nil {
-		return gasto.Resumo{}, err
+		return gasto.Resumo{}, nil, err
 	}
 	gastos, err := s.store.DoMes(ctx, userID, mes)
 	if err != nil {
-		return gasto.Resumo{}, err
+		return gasto.Resumo{}, nil, err
 	}
 	// O store já filtra pela partition key; descartar gasto alheio aqui é
 	// defesa extra, como em ObterGasto.
 	gastos = slices.DeleteFunc(gastos, func(g gasto.Gasto) bool { return g.UserID != userID })
-	return gasto.Resumir(mes, gastos), nil
+	metas, err := s.metasDoMes(ctx, userID, mes, gastos)
+	if err != nil {
+		return gasto.Resumo{}, nil, err
+	}
+	return gasto.Resumir(mes, gastos), metas, nil
 }
 
 // ExisteGastoNaCategoria informa se o usuário tem algum gasto na categoria.

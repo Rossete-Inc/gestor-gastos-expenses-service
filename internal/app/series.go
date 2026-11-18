@@ -7,6 +7,7 @@ import (
 
 	"github.com/Rossete-Inc/gestor-gastos-expenses-service/contract"
 	"github.com/Rossete-Inc/gestor-gastos-expenses-service/internal/gasto"
+	"github.com/Rossete-Inc/gestor-gastos-expenses-service/internal/meta"
 	"github.com/Rossete-Inc/gestor-gastos-expenses-service/internal/serie"
 	"github.com/Rossete-Inc/gestor-gastos-go-commons/errs"
 )
@@ -26,29 +27,50 @@ const (
 // mês da data. Com chave de idempotência repetida, devolve o gasto do
 // primeiro envio sem criar nada.
 func (s *Service) Lancar(ctx context.Context, userID string, in contract.CriarGastoIn) (gasto.Gasto, error) {
+	g, _, err := s.lancar(ctx, userID, in)
+	return g, err
+}
+
+// LancarComAlertas é o Lancar mais as metas que o lançamento fez cruzar 80%
+// ou 100% (spec metas-gastos, "Aviso ao salvar um gasto").
+func (s *Service) LancarComAlertas(ctx context.Context, userID string, in contract.CriarGastoIn) (gasto.Gasto, []meta.Alerta, error) {
+	g, criados, err := s.lancar(ctx, userID, in)
+	if err != nil {
+		return gasto.Gasto{}, nil, err
+	}
+	return g, s.alertasDaEscrita(ctx, userID, gasto.DadosDe(in.GastoIn).AutorID, nil, criados), nil
+}
+
+// lancar devolve o gasto do lançamento e todos os gastos criados por ele
+// (nenhum no reenvio idempotente).
+func (s *Service) lancar(ctx context.Context, userID string, in contract.CriarGastoIn) (gasto.Gasto, []gasto.Gasto, error) {
 	if err := gasto.ExigirUsuario(userID); err != nil {
-		return gasto.Gasto{}, err
+		return gasto.Gasto{}, nil, err
 	}
 	pedido, err := serie.PedidoDe(in)
 	if err != nil {
-		return gasto.Gasto{}, err
+		return gasto.Gasto{}, nil, err
 	}
 	if pedido == nil {
-		return s.CriarGasto(ctx, userID, gasto.DadosDe(in.GastoIn))
+		g, err := s.CriarGasto(ctx, userID, gasto.DadosDe(in.GastoIn))
+		if err != nil {
+			return gasto.Gasto{}, nil, err
+		}
+		return g, []gasto.Gasto{g}, nil
 	}
 	d, err := s.comMesDaFatura(ctx, userID, gasto.DadosDe(in.GastoIn), "")
 	if err != nil {
-		return gasto.Gasto{}, err
+		return gasto.Gasto{}, nil, err
 	}
 	agora := s.agora()
 	// Valida os dados do gasto (e os normaliza) antes de planejar a série.
 	modelo, err := gasto.Novo(gasto.NovoULID(agora), userID, d, agora)
 	if err != nil {
-		return gasto.Gasto{}, err
+		return gasto.Gasto{}, nil, err
 	}
 	fatura, err := s.faturaDoCartao(ctx, userID, d.CartaoID)
 	if err != nil {
-		return gasto.Gasto{}, err
+		return gasto.Gasto{}, nil, err
 	}
 	id := gasto.NovoULID(agora)
 	if chave := strings.TrimSpace(in.ChaveIdempotencia); chave != "" {
@@ -59,13 +81,13 @@ func (s *Service) Lancar(ctx context.Context, userID string, in contract.CriarGa
 	dados.AutorID = d.AutorID
 	se, itens, err := serie.Planejar(*pedido, id, userID, dados, fatura, agora)
 	if err != nil {
-		return gasto.Gasto{}, err
+		return gasto.Gasto{}, nil, err
 	}
 	gastos := make([]gasto.Gasto, 0, len(itens))
 	for _, it := range itens {
 		g, err := gasto.Novo(gasto.NovoULID(agora), userID, it.Dados, agora)
 		if err != nil {
-			return gasto.Gasto{}, err
+			return gasto.Gasto{}, nil, err
 		}
 		g.Serie = se.Posicao(it.Numero)
 		gastos = append(gastos, g)
@@ -76,15 +98,16 @@ func (s *Service) Lancar(ctx context.Context, userID string, in contract.CriarGa
 		// Reenvio do mesmo lançamento: devolve o gasto do primeiro envio.
 		existente, err := s.store.ObterSerie(ctx, userID, id)
 		if err != nil {
-			return gasto.Gasto{}, err
+			return gasto.Gasto{}, nil, err
 		}
-		return s.store.Obter(ctx, userID, existente.PrimeiroGastoID)
+		primeiro, err := s.store.Obter(ctx, userID, existente.PrimeiroGastoID)
+		return primeiro, nil, err
 	}
 	if err != nil {
-		return gasto.Gasto{}, err
+		return gasto.Gasto{}, nil, err
 	}
 	s.log.InfoContext(ctx, "série criada", "userId", userID, "serieId", se.ID, "tipo", se.Tipo, "gastos", len(gastos))
-	return gastos[0], nil
+	return gastos[0], gastos, nil
 }
 
 // faturaDoCartao devolve o cálculo do mês de referência para o cartão (""
@@ -173,20 +196,45 @@ func comRetentativa[T any](f func() (T, error)) (T, error) {
 // Se o valor não muda, cada parcela mantém o seu (a 1ª leva o resto da
 // divisão).
 func (s *Service) AtualizarGastoNoEscopo(ctx context.Context, userID, id string, d gasto.Dados, escopo string) (gasto.Gasto, error) {
+	e, err := s.atualizarNoEscopo(ctx, userID, id, d, escopo)
+	return e.gasto, err
+}
+
+// AtualizarGastoComAlertas é o AtualizarGastoNoEscopo mais as metas que a
+// edição fez cruzar 80% ou 100% (spec metas-gastos, "Aviso ao salvar um
+// gasto").
+func (s *Service) AtualizarGastoComAlertas(ctx context.Context, userID, id string, d gasto.Dados, escopo string) (gasto.Gasto, []meta.Alerta, error) {
+	e, err := s.atualizarNoEscopo(ctx, userID, id, d, escopo)
+	if err != nil {
+		return gasto.Gasto{}, nil, err
+	}
+	return e.gasto, s.alertasDaEscrita(ctx, userID, d.AutorID, e.antigos, e.novos), nil
+}
+
+// edicao é o resultado de uma edição: o gasto pedido e todos os gastos
+// substituídos (antigos) e gravados (novos) por ela.
+type edicao struct {
+	gasto          gasto.Gasto
+	antigos, novos []gasto.Gasto
+}
+
+func (s *Service) atualizarNoEscopo(ctx context.Context, userID, id string, d gasto.Dados, escopo string) (edicao, error) {
 	antigo, err := s.ObterGasto(ctx, userID, id)
 	if err != nil {
-		return gasto.Gasto{}, err
+		return edicao{}, err
 	}
 	if !antigo.DaSerie() {
-		return s.AtualizarGasto(ctx, userID, id, d)
+		novo, err := s.AtualizarGasto(ctx, userID, id, d)
+		return edicao{novo, []gasto.Gasto{antigo}, []gasto.Gasto{novo}}, err
 	}
 	if escopo, err = escopoDe(escopo); err != nil {
-		return gasto.Gasto{}, err
+		return edicao{}, err
 	}
 	if escopo == contract.EscopoEsta {
-		return s.ajustarSoEsta(ctx, userID, antigo, d)
+		novo, err := s.ajustarSoEsta(ctx, userID, antigo, d)
+		return edicao{novo, []gasto.Gasto{antigo}, []gasto.Gasto{novo}}, err
 	}
-	return comRetentativa(func() (gasto.Gasto, error) {
+	return comRetentativa(func() (edicao, error) {
 		return s.atualizarSerie(ctx, userID, antigo.ID, d, escopo)
 	})
 }
@@ -208,36 +256,36 @@ func (s *Service) ajustarSoEsta(ctx context.Context, userID string, antigo gasto
 	return novo, nil
 }
 
-func (s *Service) atualizarSerie(ctx context.Context, userID, id string, d gasto.Dados, escopo string) (gasto.Gasto, error) {
+func (s *Service) atualizarSerie(ctx context.Context, userID, id string, d gasto.Dados, escopo string) (edicao, error) {
 	antigo, err := s.ObterGasto(ctx, userID, id)
 	if err != nil {
-		return gasto.Gasto{}, err
+		return edicao{}, err
 	}
 	d, err = s.comMesDaFatura(ctx, userID, d, antigo.CartaoID)
 	if err != nil {
-		return gasto.Gasto{}, err
+		return edicao{}, err
 	}
 	agora := s.agora()
 	editado, err := antigo.Atualizado(d, agora)
 	if err != nil {
-		return gasto.Gasto{}, err
+		return edicao{}, err
 	}
 	if editado.Data[:len(gasto.LayoutMes)] != antigo.Data[:len(gasto.LayoutMes)] {
-		return gasto.Gasto{}, errs.Validation("Dados do gasto inválidos.",
+		return edicao{}, errs.Validation("Dados do gasto inválidos.",
 			errs.FieldError{Field: "data", Message: "para mudar o mês, altere só esta"})
 	}
 	se, err := s.store.ObterSerie(ctx, userID, antigo.Serie.SerieID)
 	if err != nil {
-		return gasto.Gasto{}, err
+		return edicao{}, err
 	}
 	itens, err := s.store.DaSerie(ctx, userID, se.ID)
 	if err != nil {
-		return gasto.Gasto{}, err
+		return edicao{}, err
 	}
 	modelo := se.ComModelo(editado.Dados(), agora)
 	fatura, err := s.faturaDoCartao(ctx, userID, modelo.CartaoID)
 	if err != nil {
-		return gasto.Gasto{}, err
+		return edicao{}, err
 	}
 	n := antigo.Serie.Numero
 	m := serie.Mudancas{UserID: userID}
@@ -281,7 +329,7 @@ func (s *Service) atualizarSerie(ctx context.Context, userID, id string, d gasto
 		nd.MesReferencia = fatura(nd.Data)
 		novo, err := it.Atualizado(nd, agora)
 		if err != nil {
-			return gasto.Gasto{}, err
+			return edicao{}, err
 		}
 		novo.Serie = it.Serie
 		novo.Serie.Ajustado = false
@@ -295,10 +343,10 @@ func (s *Service) atualizarSerie(ctx context.Context, userID, id string, d gasto
 		}
 	}
 	if err := s.store.Aplicar(ctx, m); err != nil {
-		return gasto.Gasto{}, err
+		return edicao{}, err
 	}
 	s.log.InfoContext(ctx, "série atualizada", "userId", userID, "serieId", se.ID, "escopo", escopo, "gastos", len(m.Gravar))
-	return resultado, nil
+	return edicao{resultado, m.Excluir, m.Gravar}, nil
 }
 
 // ExcluirGastoNoEscopo exclui um gasto. No gasto de série, o escopo diz o

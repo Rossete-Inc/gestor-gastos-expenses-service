@@ -11,6 +11,7 @@ import (
 
 	"github.com/Rossete-Inc/gestor-gastos-expenses-service/internal/cartao"
 	"github.com/Rossete-Inc/gestor-gastos-expenses-service/internal/gasto"
+	"github.com/Rossete-Inc/gestor-gastos-expenses-service/internal/meta"
 	"github.com/Rossete-Inc/gestor-gastos-expenses-service/internal/serie"
 	"github.com/Rossete-Inc/gestor-gastos-expenses-service/internal/store"
 	"github.com/Rossete-Inc/gestor-gastos-go-commons/errs"
@@ -25,6 +26,8 @@ type Store struct {
 	cartoes map[string]map[string]cartao.Cartao
 	// series guarda as séries por usuário e ID.
 	series map[string]map[string]serie.Serie
+	// metas guarda as metas por dono e categoria.
+	metas map[string]map[string]meta.Meta
 	// Err, se não nil, é devolvido por todas as operações.
 	Err error
 }
@@ -35,6 +38,7 @@ func New() *Store {
 		gastos:  map[string]map[string]gasto.Gasto{},
 		cartoes: map[string]map[string]cartao.Cartao{},
 		series:  map[string]map[string]serie.Serie{},
+		metas:   map[string]map[string]meta.Meta{},
 	}
 }
 
@@ -175,7 +179,8 @@ func (s *Store) ExcluirDoUsuario(_ context.Context, userID string) (int, error) 
 	if s.Err != nil {
 		return 0, s.Err
 	}
-	n := len(s.gastos[userID]) + len(s.cartoes[userID]) + len(s.series[userID])
+	n := len(s.gastos[userID]) + len(s.cartoes[userID]) + len(s.series[userID]) + len(s.metas[userID])
+	delete(s.metas, userID)
 	delete(s.gastos, userID)
 	delete(s.cartoes, userID)
 	delete(s.series, userID)

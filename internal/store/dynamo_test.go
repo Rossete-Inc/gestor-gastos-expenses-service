@@ -37,6 +37,10 @@ func (f *falso) DeleteItem(context.Context, *dynamodb.DeleteItemInput, ...func(*
 	return &dynamodb.DeleteItemOutput{}, f.err
 }
 
+func (f *falso) UpdateItem(context.Context, *dynamodb.UpdateItemInput, ...func(*dynamodb.Options)) (*dynamodb.UpdateItemOutput, error) {
+	return &dynamodb.UpdateItemOutput{}, nil
+}
+
 func (f *falso) Query(context.Context, *dynamodb.QueryInput, ...func(*dynamodb.Options)) (*dynamodb.QueryOutput, error) {
 	if f.err != nil {
 		return nil, f.err

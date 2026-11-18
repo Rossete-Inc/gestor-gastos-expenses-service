@@ -11,6 +11,7 @@ import (
 	"github.com/Rossete-Inc/gestor-gastos-expenses-service/internal/app"
 	"github.com/Rossete-Inc/gestor-gastos-expenses-service/internal/cartao"
 	"github.com/Rossete-Inc/gestor-gastos-expenses-service/internal/gasto"
+	"github.com/Rossete-Inc/gestor-gastos-expenses-service/internal/meta"
 	"github.com/Rossete-Inc/gestor-gastos-go-commons/events"
 	"github.com/Rossete-Inc/gestor-gastos-go-commons/invoke"
 	"github.com/Rossete-Inc/gestor-gastos-go-commons/page"
@@ -20,9 +21,9 @@ import (
 func Invoke(svc *app.Service, log *slog.Logger) *invoke.Router {
 	r := invoke.NewRouter(log)
 
-	r.Handle(contract.OpCriarGasto, invoke.Typed(func(ctx context.Context, userID string, in contract.CriarGastoIn) (contract.Gasto, error) {
-		g, err := svc.Lancar(ctx, userID, in)
-		return g.Contract(), err
+	r.Handle(contract.OpCriarGasto, invoke.Typed(func(ctx context.Context, userID string, in contract.CriarGastoIn) (contract.GastoComAlertas, error) {
+		g, alertas, err := svc.LancarComAlertas(ctx, userID, in)
+		return comAlertas(g, alertas), err
 	}))
 
 	r.Handle(contract.OpObterGasto, invoke.Typed(func(ctx context.Context, userID string, in contract.ObterGastoIn) (contract.Gasto, error) {
@@ -30,9 +31,9 @@ func Invoke(svc *app.Service, log *slog.Logger) *invoke.Router {
 		return g.Contract(), err
 	}))
 
-	r.Handle(contract.OpAtualizarGasto, invoke.Typed(func(ctx context.Context, userID string, in contract.AtualizarGastoIn) (contract.Gasto, error) {
-		g, err := svc.AtualizarGastoNoEscopo(ctx, userID, in.ID, gasto.DadosDe(in.GastoIn), in.Escopo)
-		return g.Contract(), err
+	r.Handle(contract.OpAtualizarGasto, invoke.Typed(func(ctx context.Context, userID string, in contract.AtualizarGastoIn) (contract.GastoComAlertas, error) {
+		g, alertas, err := svc.AtualizarGastoComAlertas(ctx, userID, in.ID, gasto.DadosDe(in.GastoIn), in.Escopo)
+		return comAlertas(g, alertas), err
 	}))
 
 	r.Handle(contract.OpExcluirGasto, invoke.Typed(func(ctx context.Context, userID string, in contract.ExcluirGastoIn) (any, error) {
@@ -60,11 +61,34 @@ func Invoke(svc *app.Service, log *slog.Logger) *invoke.Router {
 	}))
 
 	r.Handle(contract.OpResumoMensal, invoke.Typed(func(ctx context.Context, userID string, in contract.ResumoMensalIn) (contract.ResumoMensalOut, error) {
-		res, err := svc.ResumoMensal(ctx, userID, in.Mes)
+		res, metas, err := svc.ResumoMensalComMetas(ctx, userID, in.Mes)
 		if err != nil {
 			return contract.ResumoMensalOut{}, err
 		}
-		return res.Contract(), nil
+		out := res.Contract()
+		out.Metas = metasDoContrato(metas)
+		return out, nil
+	}))
+
+	r.Handle(contract.OpListarMetas, invoke.Typed(func(ctx context.Context, userID string, in contract.ListarMetasIn) (contract.ListarMetasOut, error) {
+		metas, err := svc.ListarMetas(ctx, userID, in.Mes)
+		if err != nil {
+			return contract.ListarMetasOut{}, err
+		}
+		return contract.ListarMetasOut{Items: metasDoContrato(metas)}, nil
+	}))
+
+	r.Handle(contract.OpDefinirMeta, invoke.Typed(func(ctx context.Context, userID string, in contract.DefinirMetaIn) (contract.MetaDoMes, error) {
+		m, err := svc.DefinirMeta(ctx, userID, in)
+		return m.Contract(), err
+	}))
+
+	r.Handle(contract.OpRemoverMeta, invoke.Typed(func(ctx context.Context, userID string, in contract.RemoverMetaIn) (any, error) {
+		return nil, svc.RemoverMeta(ctx, userID, in.CategoriaID, in.Mes)
+	}))
+
+	r.Handle(contract.OpExcluirMeta, invoke.Typed(func(ctx context.Context, userID string, in contract.ExcluirMetaIn) (any, error) {
+		return nil, svc.ExcluirMeta(ctx, userID, in.CategoriaID)
 	}))
 
 	r.Handle(contract.OpListarCartoes, invoke.Typed(func(ctx context.Context, userID string, _ struct{}) (contract.ListarCartoesOut, error) {
@@ -117,6 +141,24 @@ func Invoke(svc *app.Service, log *slog.Logger) *invoke.Router {
 	}))
 
 	return r
+}
+
+// comAlertas monta a resposta de CriarGasto e AtualizarGasto.
+func comAlertas(g gasto.Gasto, alertas []meta.Alerta) contract.GastoComAlertas {
+	out := contract.GastoComAlertas{Gasto: g.Contract()}
+	for _, a := range alertas {
+		out.AlertasDeMeta = append(out.AlertasDeMeta, a.Contract())
+	}
+	return out
+}
+
+// metasDoContrato converte as metas, com a lista sempre presente.
+func metasDoContrato(metas []meta.DoMes) []contract.MetaDoMes {
+	out := make([]contract.MetaDoMes, 0, len(metas))
+	for _, m := range metas {
+		out = append(out, m.Contract())
+	}
+	return out
 }
 
 // Events monta o router dos eventos consumidos.
